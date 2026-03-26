@@ -1,0 +1,1062 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src wss://relay.damus.io wss://nostr-pub.wellorder.net wss://relay.snort.social wss://nos.lol https://*.github.io; img-src 'self' data:; manifest-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none';">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0f0f0f">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="manifest" href="manifest.json">
+    <link rel="icon" href="favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <title>Vault</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        :root {
+            --bg: #0f0f0f;
+            --surface: #1a1a1a;
+            --surface-hover: #242424;
+            --border: #2a2a2a;
+            --text: #ffffff;
+            --text-muted: #888888;
+            --accent: #6366f1;
+            --accent-hover: #818cf8;
+            --success: #22c55e;
+            --danger: #ef4444;
+            --radius: 12px;
+            --radius-lg: 16px;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100dvh;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+        }
+
+        .app-container {
+            width: 100%;
+            max-width: 480px;
+            min-height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        @media (min-width: 540px) {
+            body {
+                padding: 40px 24px;
+                align-items: center;
+                background: #080808;
+            }
+            
+            .app-container {
+                min-height: 700px;
+                max-height: 900px;
+                border-radius: 32px;
+                box-shadow: 0 0 0 1px var(--border), 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+                overflow: hidden;
+                background: var(--bg);
+            }
+        }
+
+        .hidden { display: none !important; }
+
+        /* Screen Container */
+        .screen {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 24px;
+            padding-top: max(24px, env(safe-area-inset-top));
+            padding-bottom: max(24px, env(safe-area-inset-bottom));
+            animation: fadeIn 0.2s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Typography */
+        h1 {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        h2 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 15px;
+            margin-bottom: 32px;
+        }
+
+        /* Inputs */
+        .input-group {
+            margin-bottom: 16px;
+        }
+
+        .input-group label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+
+        input, textarea {
+            width: 100%;
+            padding: 14px 16px;
+            font-size: 16px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            color: var(--text);
+            outline: none;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        input:focus, textarea:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+        }
+
+        input::placeholder, textarea::placeholder {
+            color: var(--text-muted);
+        }
+
+        textarea {
+            resize: none;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        /* Buttons */
+        .btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: 100%;
+            padding: 16px 24px;
+            font-size: 16px;
+            font-weight: 600;
+            border: none;
+            border-radius: var(--radius);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover, .btn-primary:active {
+            background: var(--accent-hover);
+        }
+
+        .btn-secondary {
+            background: var(--surface);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .btn-secondary:hover, .btn-secondary:active {
+            background: var(--surface-hover);
+        }
+
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-muted);
+            padding: 12px;
+        }
+
+        .btn-ghost:hover {
+            color: var(--text);
+        }
+
+        .btn-icon {
+            width: 48px;
+            height: 48px;
+            padding: 0;
+            border-radius: 50%;
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        /* Button Stack */
+        .button-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            width: 100%;
+        }
+
+        /* Password Display */
+        .password-display {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 20px;
+            margin: 16px 0;
+            text-align: center;
+        }
+
+        .password-value {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            font-size: 20px;
+            font-weight: 600;
+            letter-spacing: 1px;
+            word-break: break-all;
+            margin-bottom: 16px;
+            min-height: 28px;
+        }
+
+        .password-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+        }
+
+        /* Site List */
+        .site-list {
+            flex: 1;
+            overflow-y: auto;
+            margin: 0 -24px;
+            padding: 0 24px;
+        }
+
+        .site-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 16px;
+            background: var(--surface);
+            border-radius: var(--radius);
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .site-item:hover, .site-item:active {
+            background: var(--surface-hover);
+        }
+
+        .btn-delete {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 50%;
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            transition: all 0.2s;
+        }
+
+        .btn-delete:hover, .btn-delete:active {
+            background: var(--danger);
+            color: white;
+        }
+
+        .site-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+        }
+
+        .site-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .site-name {
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .site-user {
+            font-size: 13px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Search */
+        .search-container {
+            position: relative;
+            margin-bottom: 16px;
+        }
+
+        .search-container input {
+            padding-left: 44px;
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: max(24px, env(safe-area-inset-bottom));
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: var(--success);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 100px;
+            font-weight: 500;
+            opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 1000;
+            white-space: nowrap;
+        }
+
+        .toast.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+
+        @media (min-width: 500px) {
+            .toast {
+                bottom: 48px;
+            }
+        }
+
+        /* Empty State */
+        .empty-state {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            color: var(--text-muted);
+            padding: 40px;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        /* Seed Phrase Grid */
+        .seed-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin: 16px 0;
+        }
+
+        .seed-word {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 8px;
+            font-size: 13px;
+            text-align: center;
+        }
+
+        .seed-word span {
+            color: var(--text-muted);
+            font-size: 11px;
+            margin-right: 4px;
+        }
+
+        /* Settings */
+        .settings-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .settings-item:last-child {
+            border-bottom: none;
+        }
+
+        .settings-label {
+            font-weight: 500;
+        }
+
+        .settings-desc {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* Version Badge */
+        .version-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: var(--surface);
+            border-radius: 8px;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        /* Spacer */
+        .spacer { flex: 1; }
+        .mt-auto { margin-top: auto; }
+        .mt-16 { margin-top: 16px; }
+        .mt-24 { margin-top: 24px; }
+        .mb-8 { margin-bottom: 8px; }
+        .text-center { text-align: center; }
+        .text-muted { color: var(--text-muted); }
+        .text-sm { font-size: 13px; }
+
+        /* Nonce Control */
+        .password-strength {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+            min-height: 16px;
+        }
+
+        .nonce-control {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            margin: 8px 0;
+        }
+
+        .nonce-control button {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-size: 18px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .nonce-control button:active {
+            background: var(--surface-hover);
+        }
+
+        .nonce-value {
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+
+        .nonce-changed .nonce-value {
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .nonce-changed button {
+            border-color: var(--accent);
+        }
+
+        /* Seed Autocomplete */
+        .seed-suggestions {
+            position: absolute;
+            bottom: 100%;
+            left: 0;
+            right: 0;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 100;
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.3);
+        }
+
+        .seed-suggestion {
+            padding: 12px 16px;
+            cursor: pointer;
+            border-bottom: 1px solid var(--border);
+            transition: background 0.15s;
+        }
+
+        .seed-suggestion:last-child {
+            border-bottom: none;
+        }
+
+        .seed-suggestion:hover,
+        .seed-suggestion.active {
+            background: var(--accent);
+        }
+
+        .seed-suggestion-match {
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .seed-suggestion.active .seed-suggestion-match {
+            color: white;
+        }
+
+        .seed-progress {
+            text-align: center;
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 8px;
+        }
+
+        /* Toggle Switch */
+        .toggle {
+            position: relative;
+            display: inline-block;
+            width: 50px;
+            height: 28px;
+        }
+
+        .toggle input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--border);
+            transition: 0.3s;
+            border-radius: 28px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 22px;
+            width: 22px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+
+        .toggle input:checked + .toggle-slider {
+            background-color: var(--accent);
+        }
+
+        .toggle input:checked + .toggle-slider:before {
+            transform: translateX(22px);
+        }
+
+        /* Debug Link */
+        .debug-link {
+            display: block;
+            font-size: 12px;
+            color: var(--accent);
+            margin-top: 4px;
+            word-break: break-all;
+        }
+
+        /* Loading Modal */
+        .modal {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            backdrop-filter: blur(4px);
+        }
+
+        .modal-content {
+            text-align: center;
+            padding: 32px;
+        }
+
+        .loading-spinner {
+            font-size: 48px;
+            animation: spin 1.5s linear infinite;
+            margin-bottom: 16px;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .modal-content p {
+            color: var(--text);
+            font-size: 15px;
+            white-space: pre-line;
+            line-height: 1.6;
+        }
+
+        .modal-content p small {
+            display: block;
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--text-muted);
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+    <!-- Toast Notification -->
+    <div id="toast" class="toast">Copied!</div>
+
+    <!-- Loading Modal -->
+    <div id="loadingModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="loading-spinner">🔄</div>
+            <p id="loadingText">Looking for backups...</p>
+        </div>
+    </div>
+
+    <!-- Backup Password Modal -->
+    <div id="backupPasswordModal" class="modal hidden">
+        <div class="modal-content" style="width: 100%; max-width: 380px; padding: 24px;">
+            <h2 id="bpModalTitle" style="margin-bottom: 8px;">Set Backup Password</h2>
+            <p id="bpModalDesc" class="text-muted text-sm" style="margin-bottom: 20px; text-align: left;">
+                This password adds a second layer of encryption to your cloud backup. It is never stored anywhere — remember it or your backup is unrecoverable.
+            </p>
+            <div class="input-group">
+                <input type="password" id="bpPass1" placeholder="Backup password" autocomplete="off">
+            </div>
+            <div class="input-group" id="bpPass2Group">
+                <input type="password" id="bpPass2" placeholder="Confirm password" autocomplete="off">
+            </div>
+            <div class="button-stack" style="margin-top: 16px;">
+                <button class="btn btn-primary" id="bpModalConfirm">Set Password & Backup</button>
+                <button class="btn btn-ghost" id="bpModalCancel">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Screen: Welcome -->
+    <div id="welcomeScreen" class="screen">
+        <div class="spacer"></div>
+        <div class="text-center">
+            <h1>🔐</h1>
+            <h1>Vault</h1>
+            <p class="subtitle">Deterministic passwords.<br>No storage. No sync. Just math.</p>
+        </div>
+        <div class="spacer"></div>
+        <div class="button-stack">
+            <button class="btn btn-primary" data-screen="newWalletScreen">
+                Create New Vault
+            </button>
+            <button class="btn btn-secondary" data-screen="restoreSeedScreen">
+                I Have a Seed Phrase
+            </button>
+            <button class="btn btn-ghost" data-screen="unlockScreen">
+                Unlock Saved Vault
+            </button>
+        </div>
+        <div class="version-badge mt-24" style="justify-content: center;">
+            <span>v3.3</span>
+            <span>•</span>
+            <span>Installable PWA</span>
+        </div>
+    </div>
+
+    <!-- Screen: Create New Wallet -->
+    <div id="newWalletScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-action="back">←</button>
+                <h2 style="margin:0">Your Seed Phrase</h2>
+            </div>
+        </div>
+        <p class="text-muted text-sm mb-8">
+            Write these 12 words down and store them safely. This is the only way to recover your vault.
+        </p>
+        <div id="seedGrid" class="seed-grid"></div>
+        <div class="spacer"></div>
+        <div class="button-stack">
+            <button class="btn btn-secondary" id="btnGenerateNewSeed">
+                🔄 Generate New
+            </button>
+            <button class="btn btn-primary" id="btnConfirmSeedBackup">
+                I've Written It Down
+            </button>
+        </div>
+    </div>
+
+    <!-- Screen: Verify Seed -->
+    <div id="verifySeedScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-action="back">←</button>
+                <h2 style="margin:0">Verify Backup</h2>
+            </div>
+        </div>
+        <p class="text-muted text-sm mb-8">
+            Enter the requested words to confirm you've saved your seed phrase.
+        </p>
+        <div id="verifyInputs"></div>
+        <div class="passphrase-field" style="margin-top: 16px;">
+            <input type="password" id="newVaultPassphrase"
+                   placeholder="BIP39 Passphrase (optional — leave empty if unsure)"
+                   autocomplete="off" autocorrect="off" spellcheck="false"
+                   style="width:100%; padding: 12px 14px; font-size: 15px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text);" />
+            <small style="color: var(--text-muted); display: block; margin-top: 4px; font-size: 12px;">
+                ℹ️ BIP39 Passphrase (25th word) — advanced second factor. Required to restore vault.
+            </small>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="btnVerifySeedBackup">
+            Verify & Continue
+        </button>
+    </div>
+
+    <!-- Screen: Restore Seed -->
+    <div id="restoreSeedScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-action="back">←</button>
+                <h2 style="margin:0">Restore Vault</h2>
+            </div>
+        </div>
+        <div class="input-group" style="position: relative;">
+            <label>Enter your 12-word seed phrase</label>
+            <textarea id="restoreSeedInput" rows="4" placeholder="Start typing..."></textarea>
+            <div id="seedSuggestions" class="seed-suggestions hidden"></div>
+        </div>
+        <div class="seed-progress">
+            <span id="wordCount">0</span>/12 words
+        </div>
+        <div class="passphrase-field" style="margin-top: 8px;">
+            <input type="password" id="bip39Passphrase" class="input-field"
+                   placeholder="BIP39 Passphrase (optional)"
+                   autocomplete="off" autocorrect="off" spellcheck="false" />
+            <small style="color: var(--text-muted); display: block; margin-top: 4px;">
+                Advanced: 25th word. Leave empty if unsure.
+            </small>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="btnRestoreFromSeed">
+            Restore Vault
+        </button>
+    </div>
+
+    <!-- Screen: Unlock Saved -->
+    <div id="unlockScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-action="back">←</button>
+                <h2 style="margin:0">Unlock Vault</h2>
+            </div>
+        </div>
+        <div class="input-group">
+            <label>Enter your unlock password</label>
+            <input type="password" id="unlockPassword" placeholder="Password">
+        </div>
+        <div class="spacer"></div>
+        <div class="button-stack">
+            <button class="btn btn-primary" id="btnUnlockVault">
+                Unlock
+            </button>
+            <button class="btn btn-ghost" data-screen="restoreSeedScreen">
+                Use seed phrase instead
+            </button>
+        </div>
+    </div>
+
+    <!-- Screen: Main (Site List) -->
+    <div id="mainScreen" class="screen hidden">
+        <div class="header">
+            <h1>Vault</h1>
+            <button class="btn btn-ghost btn-icon" data-screen="settingsScreen">⚙️</button>
+        </div>
+        <div class="search-container">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="siteSearch" placeholder="Search or add site...">
+        </div>
+        <div id="siteList" class="site-list"></div>
+        <div id="emptyState" class="empty-state hidden">
+            <div class="empty-state-icon">🔐</div>
+            <p>No sites yet</p>
+            <p class="text-sm mt-16">Type a site name above and press Enter to add</p>
+        </div>
+    </div>
+
+    <!-- Screen: Generate Password -->
+    <div id="generateScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-screen="mainScreen">←</button>
+                <h2 style="margin:0" id="generateTitle">Generate Password</h2>
+            </div>
+        </div>
+        <div class="input-group">
+            <label>Site / App</label>
+            <input type="text" id="genSite" placeholder="example.com">
+        </div>
+        <div class="input-group">
+            <label>Username / Email</label>
+            <input type="text" id="genUser" placeholder="you@email.com">
+        </div>
+        <div class="password-display">
+            <div class="password-value" id="genPassword">••••••••••••</div>
+            <div id="passwordStrength" class="password-strength"></div>
+            <div class="nonce-control">
+                <button id="btnDecrementNonce">−</button>
+                <span class="nonce-value">Version <span id="nonceDisplay">1</span></span>
+                <button id="btnIncrementNonce">+</button>
+            </div>
+            <div class="password-actions">
+                <button class="btn btn-secondary" id="btnToggleVisibility" style="width:auto; padding: 10px 20px;">
+                    <span id="visibilityIcon">👁️</span>
+                </button>
+            </div>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="btnSaveAndCopy">
+            Save & Copy Password
+        </button>
+    </div>
+
+    <!-- Screen: Settings -->
+    <div id="settingsScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-screen="mainScreen">←</button>
+                <h2 style="margin:0">Settings</h2>
+            </div>
+        </div>
+        <div class="settings-item" data-screen="backupScreen">
+            <div>
+                <div class="settings-label">☁️ Cloud Backup <span id="backupWarningBadge" class="hidden" title="Last backup failed — no relays confirmed" style="color:#e74c3c;font-size:0.85em;">⚠️</span></div>
+                <div class="settings-desc">Sync via Nostr relays</div>
+            </div>
+            <span>→</span>
+        </div>
+        <div class="settings-item" data-screen="encryptScreen">
+            <div>
+                <div class="settings-label">💾 Save Locally</div>
+                <div class="settings-desc">Encrypt & save to this device</div>
+            </div>
+            <span>→</span>
+        </div>
+        <div class="settings-item" data-screen="exportScreen">
+            <div>
+                <div class="settings-label">📦 Export / Import</div>
+                <div class="settings-desc">Download or restore your site list</div>
+            </div>
+            <span>→</span>
+        </div>
+        <div class="settings-item" data-screen="advancedScreen">
+            <div>
+                <div class="settings-label">🔧 Advanced</div>
+                <div class="settings-desc">Hash length, seed phrase</div>
+            </div>
+            <span>→</span>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn btn-danger" id="btnLockVault">
+            🔒 Lock Vault
+        </button>
+    </div>
+
+    <!-- Screen: Backup (Nostr) -->
+    <div id="backupScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-screen="settingsScreen">←</button>
+                <h2 style="margin:0">Cloud Backup</h2>
+            </div>
+        </div>
+        <p class="text-muted text-sm mb-8">
+            Backup your site list to decentralized Nostr relays. Your data is double-encrypted: first with your backup password, then with your Nostr key.
+        </p>
+        <div id="backupPasswordStatus" class="version-badge mb-8" style="justify-content: center;">
+            <span>🔒 Backup password: not set</span>
+        </div>
+        <div class="button-stack">
+            <button class="btn btn-primary" id="btnBackupToNostr">
+                ☁️ Backup Now
+            </button>
+            <button class="btn btn-secondary" id="btnRestoreFromNostr">
+                📥 Restore from Cloud
+            </button>
+            <button class="btn btn-secondary" id="btnChangeBackupPassword">
+                🔑 Change Backup Password
+            </button>
+            <button class="btn btn-ghost" id="btnOpenNostrHistory">
+                📜 View Backup History
+            </button>
+        </div>
+        <div id="nostrHistoryContainer" class="mt-24 hidden"></div>
+    </div>
+
+    <!-- Screen: Encrypt Local -->
+    <div id="encryptScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-screen="settingsScreen">←</button>
+                <h2 style="margin:0">Save Locally</h2>
+            </div>
+        </div>
+        <p class="text-muted text-sm mb-8">
+            Save your vault to this device with a password. You can unlock it later without your seed phrase.
+        </p>
+        <div class="input-group">
+            <label>Password</label>
+            <input type="password" id="encryptPass1" placeholder="Enter password">
+        </div>
+        <div class="input-group">
+            <label>Confirm Password</label>
+            <input type="password" id="encryptPass2" placeholder="Confirm password">
+        </div>
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="btnSaveEncrypted">
+            💾 Save to Device
+        </button>
+    </div>
+
+    <!-- Screen: Export / Import -->
+    <div id="exportScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-screen="settingsScreen">←</button>
+                <h2 style="margin:0">Export / Import</h2>
+            </div>
+        </div>
+        <p class="text-muted text-sm mb-8">
+            Export your vault as JSON or import a previously exported file.
+        </p>
+        <div class="button-stack">
+            <button class="btn btn-primary" id="btnDownloadData">
+                📥 Export JSON
+            </button>
+            <button class="btn btn-secondary" id="btnTriggerImport">
+                📤 Import JSON
+            </button>
+        </div>
+    </div>
+
+    <!-- Screen: Advanced -->
+    <div id="advancedScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-screen="settingsScreen">←</button>
+                <h2 style="margin:0">Advanced</h2>
+            </div>
+        </div>
+        <div class="input-group">
+            <label>Password Hash Length (8-64)</label>
+            <input type="number" id="hashLengthSetting" min="8" max="64" value="16">
+            <p class="text-muted text-sm mt-8">Changing this will generate different passwords.</p>
+        </div>
+        <div class="settings-item">
+            <div>
+                <div class="settings-label">🐛 Debug Mode</div>
+                <div class="settings-desc">Show Nostr event links (njump.me)</div>
+            </div>
+            <label class="toggle">
+                <input type="checkbox" id="debugModeToggle">
+                <span class="toggle-slider"></span>
+            </label>
+        </div>
+        <button class="btn btn-secondary mt-16" id="btnSaveAdvancedSettings">
+            Save Settings
+        </button>
+        <div class="settings-item mt-24" data-action="showSeedPhrase">
+            <div>
+                <div class="settings-label">🔑 View Seed Phrase</div>
+                <div class="settings-desc">Show your 12-word backup</div>
+            </div>
+            <span>→</span>
+        </div>
+    </div>
+
+    <!-- Screen: View Seed -->
+    <div id="viewSeedScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-screen="advancedScreen">←</button>
+                <h2 style="margin:0">Seed Phrase</h2>
+            </div>
+        </div>
+        <p class="text-muted text-sm mb-8">
+            Keep this safe. Anyone with these words can access your passwords.
+        </p>
+        <div id="viewSeedGrid" class="seed-grid"></div>
+        <button class="btn btn-secondary mt-24" id="btnCopySeedPhrase">
+            📋 Copy to Clipboard
+        </button>
+    </div>
+
+    </div><!-- /app-container -->
+
+    <!-- Scripts -->
+    <script src="bip39WordList.js"></script>
+    <script src="crypto-js.min.js"></script>
+    <script src="lib/nostr-tools.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
