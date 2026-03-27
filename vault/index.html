@@ -82,6 +82,13 @@
             padding-top: max(24px, env(safe-area-inset-top));
             padding-bottom: max(24px, env(safe-area-inset-bottom));
             animation: fadeIn 0.2s ease;
+            overflow: hidden;
+        }
+
+        .screen-scroll {
+            flex: 1;
+            overflow-y: auto;
+            min-height: 0;
         }
 
         @keyframes fadeIn {
@@ -242,8 +249,6 @@
 
         /* Site List */
         .site-list {
-            flex: 1;
-            overflow-y: auto;
             margin: 0 -24px;
             padding: 0 24px;
         }
@@ -516,17 +521,17 @@
         /* Seed Autocomplete */
         .seed-suggestions {
             position: absolute;
-            bottom: 100%;
+            top: 100%;
             left: 0;
             right: 0;
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: var(--radius);
-            margin-bottom: 8px;
+            margin-top: 8px;
             max-height: 200px;
             overflow-y: auto;
             z-index: 100;
-            box-shadow: 0 -4px 20px rgba(0,0,0,0.3);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
         }
 
         .seed-suggestion {
@@ -836,11 +841,13 @@
             <span class="search-icon">🔍</span>
             <input type="text" id="siteSearch" placeholder="Search or add site...">
         </div>
-        <div id="siteList" class="site-list"></div>
-        <div id="emptyState" class="empty-state hidden">
-            <div class="empty-state-icon">🔐</div>
-            <p>No sites yet</p>
-            <p class="text-sm mt-16">Type a site name above and press Enter to add</p>
+        <div class="screen-scroll">
+            <div id="siteList" class="site-list"></div>
+            <div id="emptyState" class="empty-state hidden">
+                <div class="empty-state-icon">🔐</div>
+                <p>No sites yet</p>
+                <p class="text-sm mt-16">Type a site name above and press Enter to add</p>
+            </div>
         </div>
     </div>
 

@@ -81,6 +81,7 @@ function showScreen(screenId) {
         target.classList.remove('hidden');
         if (navigationStack[navigationStack.length - 1] !== screenId) {
             navigationStack.push(screenId);
+            history.pushState({ screen: screenId }, '');
         }
     }
 
@@ -931,7 +932,7 @@ function lockVault(skipConfirm = false) {
     navigationStack = ['welcomeScreen'];
 
     // Wipe all sensitive data from DOM
-    document.querySelectorAll('input').forEach(el => { el.value = ''; });
+    document.querySelectorAll('input, textarea').forEach(el => { el.value = ''; });
     document.querySelectorAll('[data-seed-word], .seed-word, .word-item, .word-display').forEach(el => {
         el.textContent = '';
     });
@@ -2523,6 +2524,18 @@ function setupKeyboardShortcuts() {
 document.addEventListener('DOMContentLoaded', () => {
     setupInactivityListeners();
     setupKeyboardShortcuts();
+
+    // Android back button support via browser history
+    history.replaceState({ screen: 'welcomeScreen' }, '');
+    window.addEventListener('popstate', (e) => {
+        if (navigationStack.length > 1) {
+            navigationStack.pop();
+            const prev = navigationStack[navigationStack.length - 1] || 'welcomeScreen';
+            document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
+            const target = document.getElementById(prev);
+            if (target) target.classList.remove('hidden');
+        }
+    });
 
     // ── Delegated screen navigation ──
     document.addEventListener('click', (e) => {
