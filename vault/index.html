@@ -39,7 +39,8 @@
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: var(--bg);
             color: var(--text);
-            min-height: 100dvh;
+            height: 100dvh;
+            overflow: hidden;
             display: flex;
             justify-content: center;
             align-items: flex-start;
@@ -48,26 +49,147 @@
         .app-container {
             width: 100%;
             max-width: 480px;
-            min-height: 100dvh;
+            height: 100dvh;
             display: flex;
             flex-direction: column;
             position: relative;
+            overflow: hidden;
         }
 
         @media (min-width: 540px) {
             body {
-                padding: 40px 24px;
+                padding: 60px 24px;
                 align-items: center;
-                background: #080808;
+                background: #050505;
+                overflow: hidden;
             }
-            
+
+            .bg-effects {
+                position: fixed;
+                inset: 0;
+                pointer-events: none;
+                z-index: 0;
+                overflow: hidden;
+            }
+
+            .bg-orb {
+                position: absolute;
+                border-radius: 50%;
+                filter: blur(60px);
+                background: rgba(255, 255, 255, 0.07);
+            }
+
+            .bg-orb-1 {
+                width: 300px;
+                height: 300px;
+                top: -5%;
+                left: 10%;
+                animation: orbFloat1 12s ease-in-out infinite;
+            }
+
+            .bg-orb-2 {
+                width: 250px;
+                height: 250px;
+                bottom: 5%;
+                right: 5%;
+                animation: orbFloat2 15s ease-in-out infinite;
+            }
+
+            .bg-orb-3 {
+                width: 180px;
+                height: 180px;
+                top: 40%;
+                left: 65%;
+                filter: blur(50px);
+                background: rgba(255, 255, 255, 0.05);
+                animation: orbFloat3 10s ease-in-out infinite;
+            }
+
+            .bg-orb-4 {
+                width: 220px;
+                height: 220px;
+                top: 20%;
+                left: -5%;
+                filter: blur(55px);
+                background: rgba(255, 255, 255, 0.06);
+                animation: orbFloat4 13s ease-in-out infinite;
+            }
+
+            .bg-grid {
+                position: absolute;
+                inset: 0;
+                background-image: linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+                                  linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+                background-size: 60px 60px;
+                -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 50%, black, transparent);
+                mask-image: radial-gradient(ellipse 70% 60% at 50% 50%, black, transparent);
+                animation: gridPulse 8s ease-in-out infinite;
+            }
+
+            .bg-shimmer {
+                position: absolute;
+                top: 0;
+                left: -100%;
+                width: 50%;
+                height: 100%;
+                background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.03), rgba(255,255,255,0.02), transparent);
+                animation: shimmer 12s ease-in-out infinite;
+                transform: skewX(-15deg);
+            }
+
+            @keyframes orbFloat1 {
+                0% { transform: translate(0, 0) scale(1); }
+                15% { transform: translate(150px, 80px) scale(1.2); }
+                35% { transform: translate(60px, 200px) scale(0.8); }
+                55% { transform: translate(-100px, 150px) scale(1.1); }
+                75% { transform: translate(-50px, 40px) scale(0.9); }
+                100% { transform: translate(0, 0) scale(1); }
+            }
+
+            @keyframes orbFloat2 {
+                0% { transform: translate(0, 0) scale(1); }
+                20% { transform: translate(-120px, -100px) scale(1.3); }
+                40% { transform: translate(-200px, -30px) scale(0.7); }
+                60% { transform: translate(-80px, -180px) scale(1.15); }
+                80% { transform: translate(50px, -60px) scale(0.85); }
+                100% { transform: translate(0, 0) scale(1); }
+            }
+
+            @keyframes orbFloat3 {
+                0% { transform: translate(0, 0) scale(1); }
+                20% { transform: translate(-180px, -80px) scale(1.3); }
+                45% { transform: translate(-60px, 100px) scale(0.7); }
+                70% { transform: translate(80px, -50px) scale(1.2); }
+                100% { transform: translate(0, 0) scale(1); }
+            }
+
+            @keyframes orbFloat4 {
+                0% { transform: translate(0, 0) scale(1); }
+                25% { transform: translate(140px, -120px) scale(1.2); }
+                50% { transform: translate(200px, 50px) scale(0.8); }
+                75% { transform: translate(80px, 130px) scale(1.15); }
+                100% { transform: translate(0, 0) scale(1); }
+            }
+
+            @keyframes gridPulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.4; }
+            }
+
+            @keyframes shimmer {
+                0% { left: -50%; }
+                40%, 100% { left: 150%; }
+            }
+
             .app-container {
                 min-height: 700px;
                 max-height: 900px;
                 border-radius: 32px;
-                box-shadow: 0 0 0 1px var(--border), 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+                box-shadow: 0 0 0 1px var(--border), 0 25px 50px -12px rgba(0, 0, 0, 0.8), 0 0 100px -30px rgba(99, 102, 241, 0.15);
                 overflow: hidden;
                 background: var(--bg);
+                position: relative;
+                z-index: 1;
             }
         }
 
@@ -354,6 +476,43 @@
             display: flex;
             align-items: center;
             gap: 12px;
+        }
+
+        /* Relay Status Indicator */
+        .relay-status {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-left: 10px;
+            vertical-align: middle;
+            transition: background 0.3s ease;
+        }
+
+        .relay-status[data-status="synced"] {
+            background: var(--success);
+            box-shadow: 0 0 6px var(--success);
+        }
+
+        .relay-status[data-status="syncing"] {
+            background: #eab308;
+            box-shadow: 0 0 6px #eab308;
+            animation: pulse-yellow 1.5s ease-in-out infinite;
+        }
+
+        .relay-status[data-status="failed"] {
+            background: var(--danger);
+            box-shadow: 0 0 6px var(--danger);
+        }
+
+        .relay-status[data-status="idle"] {
+            background: var(--text-muted);
+            opacity: 0.4;
+        }
+
+        @keyframes pulse-yellow {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
         }
 
         /* Toast */
@@ -669,6 +828,16 @@
     </style>
 </head>
 <body>
+    <!-- Animated background effects (desktop only) -->
+    <div class="bg-effects">
+        <div class="bg-orb bg-orb-1"></div>
+        <div class="bg-orb bg-orb-2"></div>
+        <div class="bg-orb bg-orb-3"></div>
+        <div class="bg-orb bg-orb-4"></div>
+        <div class="bg-grid"></div>
+        <div class="bg-shimmer"></div>
+    </div>
+
     <div class="app-container">
     <!-- Toast Notification -->
     <div id="toast" class="toast">Copied!</div>
@@ -716,9 +885,6 @@
             </button>
             <button class="btn btn-secondary" data-screen="restoreSeedScreen">
                 I Have a Seed Phrase
-            </button>
-            <button class="btn btn-ghost" data-screen="unlockScreen">
-                Unlock Saved Vault
             </button>
         </div>
         <div class="version-badge mt-24" style="justify-content: center;">
@@ -808,6 +974,38 @@
         </button>
     </div>
 
+    <!-- Screen: Set Master Password -->
+    <div id="setMasterPasswordScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <h2 style="margin:0">Set a Password</h2>
+            </div>
+        </div>
+        <p class="text-muted text-sm mb-8">
+            Protect your vault on this device. You'll need this password each time you open the app.
+        </p>
+        <div class="input-group">
+            <label>Password</label>
+            <input type="password" id="masterPass1" placeholder="Enter password" autocomplete="new-password">
+        </div>
+        <div class="input-group">
+            <label>Confirm Password</label>
+            <input type="password" id="masterPass2" placeholder="Confirm password" autocomplete="new-password">
+        </div>
+        <div class="spacer"></div>
+        <div class="button-stack">
+            <button class="btn btn-primary" id="btnSetMasterPassword">
+                Set Password
+            </button>
+            <button class="btn btn-ghost" id="btnSkipMasterPassword">
+                Skip for now
+            </button>
+            <p class="text-muted text-sm text-center" style="margin-top: 4px;">
+                If you skip, you'll need your seed phrase to access the vault next time.
+            </p>
+        </div>
+    </div>
+
     <!-- Screen: Unlock Saved -->
     <div id="unlockScreen" class="screen hidden">
         <div class="header">
@@ -828,13 +1026,16 @@
             <button class="btn btn-ghost" data-screen="restoreSeedScreen">
                 Use seed phrase instead
             </button>
+            <button class="btn btn-ghost" id="btnDeleteAllDataUnlock" style="color: var(--danger); font-size: 13px;">
+                Delete all data
+            </button>
         </div>
     </div>
 
     <!-- Screen: Main (Site List) -->
     <div id="mainScreen" class="screen hidden">
         <div class="header">
-            <h1>Vault</h1>
+            <h1>Vault <span id="relayStatus" class="relay-status" data-status="idle" title="Relay: idle"></span></h1>
             <button class="btn btn-ghost btn-icon" data-screen="settingsScreen">⚙️</button>
         </div>
         <div class="search-container">
@@ -902,13 +1103,6 @@
             </div>
             <span>→</span>
         </div>
-        <div class="settings-item" data-screen="encryptScreen">
-            <div>
-                <div class="settings-label">💾 Save Locally</div>
-                <div class="settings-desc">Encrypt & save to this device</div>
-            </div>
-            <span>→</span>
-        </div>
         <div class="settings-item" data-screen="exportScreen">
             <div>
                 <div class="settings-label">📦 Export / Import</div>
@@ -927,6 +1121,9 @@
         <button class="btn btn-danger" id="btnLockVault">
             🔒 Lock Vault
         </button>
+        <button class="btn btn-ghost mt-16" id="btnDeleteAllData" style="color: var(--danger);">
+            🗑️ Delete All Data
+        </button>
     </div>
 
     <!-- Screen: Backup (Nostr) -->
@@ -938,11 +1135,8 @@
             </div>
         </div>
         <p class="text-muted text-sm mb-8">
-            Backup your site list to decentralized Nostr relays. Your data is double-encrypted: first with your backup password, then with your Nostr key.
+            Backup your site list to decentralized Nostr relays. Your data is encrypted with your seed-derived key (NIP-44).
         </p>
-        <div id="backupPasswordStatus" class="version-badge mb-8" style="justify-content: center;">
-            <span>🔒 Backup password: not set</span>
-        </div>
         <div class="button-stack">
             <button class="btn btn-primary" id="btnBackupToNostr">
                 ☁️ Backup Now
@@ -950,39 +1144,11 @@
             <button class="btn btn-secondary" id="btnRestoreFromNostr">
                 📥 Restore from Cloud
             </button>
-            <button class="btn btn-secondary" id="btnChangeBackupPassword">
-                🔑 Change Backup Password
-            </button>
             <button class="btn btn-ghost" id="btnOpenNostrHistory">
                 📜 View Backup History
             </button>
         </div>
         <div id="nostrHistoryContainer" class="mt-24 hidden"></div>
-    </div>
-
-    <!-- Screen: Encrypt Local -->
-    <div id="encryptScreen" class="screen hidden">
-        <div class="header">
-            <div class="header-left">
-                <button class="btn btn-ghost btn-icon" data-screen="settingsScreen">←</button>
-                <h2 style="margin:0">Save Locally</h2>
-            </div>
-        </div>
-        <p class="text-muted text-sm mb-8">
-            Save your vault to this device with a password. You can unlock it later without your seed phrase.
-        </p>
-        <div class="input-group">
-            <label>Password</label>
-            <input type="password" id="encryptPass1" placeholder="Enter password">
-        </div>
-        <div class="input-group">
-            <label>Confirm Password</label>
-            <input type="password" id="encryptPass2" placeholder="Confirm password">
-        </div>
-        <div class="spacer"></div>
-        <button class="btn btn-primary" id="btnSaveEncrypted">
-            💾 Save to Device
-        </button>
     </div>
 
     <!-- Screen: Export / Import -->

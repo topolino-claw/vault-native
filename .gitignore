@@ -1,0 +1,8 @@
+# IDE
+.idea/
+
+# Rust build output
+src-tauri/target/
+
+# Cargo config
+src-tauri/.cargo/

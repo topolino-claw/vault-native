@@ -30,6 +30,7 @@ let inactivityTimer = null;
 let unlockAttempts = 0;
 let unlockLockoutUntil = 0;
 let clipboardClearTimer = null;
+let _masterPassword = null;
 
 const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const VISIBILITY_LOCK_MS = 2 * 60 * 1000; // 2 minutes hidden = lock
@@ -91,13 +92,7 @@ function showScreen(screenId) {
     } else if (screenId === 'newWalletScreen') {
         generateNewSeed(true);
     } else if (screenId === 'backupScreen') {
-        const statusEl = document.getElementById('backupPasswordStatus');
-        if (statusEl) {
-            const hasPassword = vault.settings.hasBackupPassword || false;
-            statusEl.innerHTML = hasPassword
-                ? '<span>🔒 Backup password: ✅ set</span>'
-                : '<span>🔒 Backup password: not set</span>';
-        }
+        // No per-screen setup needed — backup is seamless now
     } else if (screenId === 'settingsScreen') {
         updateBackupWarningIndicator();
     } else if (screenId === 'advancedScreen') {
@@ -622,7 +617,7 @@ async function verifySeedBackup() {
         const passphrase = document.getElementById('newVaultPassphrase')?.value || '';
         await initializeVault(vault.seedPhrase, passphrase);
         await checkForRemoteBackups();
-        showScreen('mainScreen');
+        showScreen('setMasterPasswordScreen');
     } else {
         showToast('Incorrect words. Try again.');
     }
@@ -647,7 +642,14 @@ async function restoreFromSeed() {
     const passphrase = document.getElementById('bip39Passphrase')?.value || '';
     await initializeVault(input, passphrase);
     await checkForRemoteBackups();
-    showScreen('mainScreen');
+
+    // Clear sensitive seed phrase from the input fields
+    document.getElementById('restoreSeedInput').value = '';
+    const passphraseEl = document.getElementById('bip39Passphrase');
+    if (passphraseEl) passphraseEl.value = '';
+    document.getElementById('wordCount').textContent = '0';
+
+    showScreen('setMasterPasswordScreen');
 }
 
 // ============================================
@@ -721,91 +723,23 @@ async function checkForRemoteBackups() {
     showLoading(`Looking for remote backups...\n${npubShort}`);
 
     try {
-        const { found, isLegacy } = await silentRestoreFromNostr();
+        const { found } = await silentRestoreFromNostr();
         hideLoading();
 
         if (found) {
+            vault.settings.lastBackupFailed = false;
+            setRelayStatus('synced');
             showToast('Synced from cloud backup!');
-            // If backup was single-layer (legacy), nudge user to set a backup password
-            if (isLegacy && !vault.settings.hasBackupPassword) {
-                showBackupPasswordNudge();
-            }
-            // If vault has a backup password but session cache is empty, prompt early
-            // so silent backups don't pile up as pending
-            if (vault.settings.hasBackupPassword && !_sessionBackupPassword) {
-                const pwd = await showBackupPasswordModal('enter');
-                if (pwd) {
-                    _sessionBackupPassword = pwd;
-                }
-            }
         } else {
             showToast('Vault ready');
-            // No backup on relays and no backup password set — nudge to set one
-            if (!vault.settings.hasBackupPassword) {
-                showBackupPasswordNudge();
-            }
         }
     } catch (e) {
         console.error('Backup check failed:', e);
         hideLoading();
+        setRelayStatus('failed');
         showToast('Vault ready (offline)');
     }
 }
-
-/**
- * Show a non-blocking nudge banner suggesting the user set a backup password.
- * Shown once per session. Inserts a dismissible banner in the settings screen
- * and shows a brief actionable toast on the main screen.
- */
-function showBackupPasswordNudge(pendingMsg) {
-    if (_backupPasswordNudgeShown) return;
-    _backupPasswordNudgeShown = true;
-
-    // Show an actionable toast on the main screen
-    const toast = document.getElementById('toast');
-    if (!toast) return;
-
-    toast.innerHTML = '';
-    const text = document.createElement('span');
-    text.textContent = pendingMsg || '🔒 Backup not password-protected. ';
-
-    const btn = document.createElement('button');
-    btn.textContent = 'Set now';
-    btn.style.cssText = 'background:none;border:none;color:var(--accent,#7c5cff);cursor:pointer;text-decoration:underline;font-size:inherit;padding:0;margin-left:4px;';
-    btn.addEventListener('click', async () => {
-        toast.classList.remove('show');
-        const mode = vault.settings.hasBackupPassword ? 'enter' : 'set';
-        const pwd = await showBackupPasswordModal(mode);
-        if (pwd) {
-            _sessionBackupPassword = pwd;
-            vault.settings.hasBackupPassword = true;
-            if (_pendingBackupAfterPassword) {
-                _pendingBackupAfterPassword = false;
-                showToast('Syncing backup...');
-                await backupToNostr(false, pwd);
-            } else {
-                showToast('Re-encrypting backup...');
-                await backupToNostr(false, pwd);
-            }
-        }
-    });
-
-    toast.appendChild(text);
-    toast.appendChild(btn);
-    toast.classList.add('show');
-    setTimeout(() => {
-        if (toast.classList.contains('show')) {
-            toast.classList.remove('show');
-            toast.innerHTML = ''; // Reset for normal showToast usage
-        }
-    }, 10000);
-}
-
-/** Whether the backup password nudge has been shown this session. @type {boolean} */
-let _backupPasswordNudgeShown = false;
-
-/** Whether a backup is pending because no backup password was available. @type {boolean} */
-let _pendingBackupAfterPassword = false;
 
 /**
  * Silently attempt to restore vault data from Nostr relays without UI prompts.
@@ -813,12 +747,11 @@ let _pendingBackupAfterPassword = false;
  * and merges users/settings into the current vault state.
  * After a successful restore, saves a local encrypted backup.
  *
- * @returns {Promise<{ found: boolean, isLegacy: boolean }>}
- *   found    — true if a backup was found and applied
- *   isLegacy — true if the backup was single-layer (no v2 envelope)
+ * @returns {Promise<{ found: boolean }>}
+ *   found — true if a backup was found and applied
  */
 async function silentRestoreFromNostr() {
-    if (!vault.privateKey) return { found: false, isLegacy: false };
+    if (!vault.privateKey) return { found: false };
 
     const { sk, pk } = await getNostrKeyPair();
 
@@ -860,7 +793,8 @@ async function silentRestoreFromNostr() {
                 debugMode = vault.settings.debugMode || false;
             }
             saveLocalNonceBackup();
-            return { found: true, isLegacy: !vault.settings.hasBackupPassword };
+            autoSaveVault();
+            return { found: true };
         } catch (e) {
             if (e.message && e.message.includes('password')) {
                 try {
@@ -872,7 +806,8 @@ async function silentRestoreFromNostr() {
                         debugMode = vault.settings.debugMode || false;
                     }
                     saveLocalNonceBackup();
-                    return { found: true, isLegacy: false };
+                    autoSaveVault();
+                    return { found: true };
                 } catch (e2) {
                     debugLog('silentRestoreFromNostr: interactive decrypt failed:', e2);
                 }
@@ -907,7 +842,7 @@ async function silentRestoreFromNostr() {
         }
     }
 
-    return { found: false, isLegacy: false };
+    return { found: false };
 }
 
 /**
@@ -917,7 +852,30 @@ async function silentRestoreFromNostr() {
  * @param {boolean} [skipConfirm=false] - If true, skip the confirmation dialog.
  */
 function lockVault(skipConfirm = false) {
-    if (!skipConfirm && vault.privateKey) {
+    // No-password sessions: vault lives only in memory and cannot be recovered.
+    if (!_masterPassword && vault.privateKey) {
+        // Auto-lock (inactivity / visibility): silently skip — nothing to unlock against.
+        if (skipConfirm) return;
+
+        // Manual lock: warn clearly and redirect to set a password first.
+        const choice = confirm(
+            'No master password is set!\n\n' +
+            'Your vault exists only in memory and will be PERMANENTLY LOST if you lock now.\n\n' +
+            'Press OK to set a password first, or Cancel to lock anyway (destroys vault).'
+        );
+        if (choice) {
+            // Send them to the password setup screen instead of locking.
+            showScreen('setMasterPasswordScreen');
+            return;
+        }
+        // They chose "Cancel" = lock anyway — give one more explicit chance.
+        if (!confirm(
+            'ARE YOU SURE?\n\n' +
+            'Without a saved password your vault CANNOT be recovered ' +
+            'unless you have your seed phrase.\n\n' +
+            'Lock and destroy vault?'
+        )) return;
+    } else if (!skipConfirm && vault.privateKey) {
         if (!confirm('Lock vault? Make sure you have your seed phrase saved.')) return;
     }
     if (inactivityTimer) clearTimeout(inactivityTimer);
@@ -928,8 +886,7 @@ function lockVault(skipConfirm = false) {
     // Wipe all sensitive data from memory
     vault = { privateKey: '', seedPhrase: '', passphrase: '', users: {}, settings: { hashLength: 16 } };
     nostrKeys = { nsec: '', npub: '' };
-    _sessionBackupPassword = null;
-    navigationStack = ['welcomeScreen'];
+    _masterPassword = null;
 
     // Wipe all sensitive data from DOM
     document.querySelectorAll('input, textarea').forEach(el => { el.value = ''; });
@@ -946,7 +903,10 @@ function lockVault(skipConfirm = false) {
         });
     });
 
-    showScreen('welcomeScreen');
+    const hasLocalVault = !!localStorage.getItem('vaultEncrypted');
+    const targetScreen = hasLocalVault ? 'unlockScreen' : 'welcomeScreen';
+    navigationStack = [targetScreen];
+    showScreen(targetScreen);
     showToast('Vault locked');
 }
 
@@ -980,6 +940,28 @@ function saveLocalNonceBackup() {
     } catch (e) {
         // Non-fatal: if localStorage is full or unavailable, log and continue
         debugLog('saveLocalNonceBackup: failed to save local backup:', e);
+    }
+}
+
+/**
+ * Auto-save the full vault to localStorage, encrypted with the master password.
+ * Called after every vault data mutation. No-op if the user skipped password setup.
+ */
+function autoSaveVault() {
+    if (!_masterPassword || !vault.privateKey) return;
+    try {
+        const saveData = {
+            privateKey: vault.privateKey,
+            seedPhrase: vault.seedPhrase,
+            passphrase: vault.passphrase || '',
+            users: vault.users,
+            settings: vault.settings
+        };
+        const encrypted = CryptoJS.AES.encrypt(JSON.stringify(saveData), _masterPassword).toString();
+        localStorage.setItem('vaultEncrypted', encrypted);
+        debugLog('autoSaveVault: saved');
+    } catch (e) {
+        debugLog('autoSaveVault: failed:', e);
     }
 }
 
@@ -1231,6 +1213,7 @@ function copyPassword() {
 
     // Persist nonce changes to local backup immediately (nonce may have changed)
     saveLocalNonceBackup();
+    autoSaveVault();
 
     // Background sync to Nostr
     backupToNostrDebounced();
@@ -1265,6 +1248,8 @@ function deleteSite(site, user) {
 
     showToast('Site deleted');
     renderSiteList();
+    saveLocalNonceBackup();
+    autoSaveVault();
     backupToNostrDebounced();
 }
 
@@ -1283,8 +1268,11 @@ function backupToNostrSilent() {
  */
 let _backupDebounceTimer = null;
 function backupToNostrDebounced() {
+    console.log('[relay] backupToNostrDebounced: queued (3s)');
     if (_backupDebounceTimer) clearTimeout(_backupDebounceTimer);
+    setRelayStatus('syncing');
     _backupDebounceTimer = setTimeout(() => {
+        console.log('[relay] backupToNostrDebounced: firing now');
         backupToNostrSilent();
         _backupDebounceTimer = null;
     }, 3000);
@@ -1304,17 +1292,85 @@ function updateBackupWarningIndicator() {
     }
 }
 
+/**
+ * Update the relay status indicator dot in the main screen header.
+ * @param {'synced'|'syncing'|'failed'|'idle'} status
+ */
+let _lastRelayStatus = 'idle';
+let _lastSettledRelayStatus = 'idle';
+function setRelayStatus(status) {
+    const el = document.getElementById('relayStatus');
+    if (!el) return;
+    debugLog(`[relay-status] ${_lastRelayStatus} → ${status}`);
+    _lastRelayStatus = status;
+    if (status !== 'syncing') _lastSettledRelayStatus = status;
+    el.dataset.status = status;
+    const labels = {
+        synced: 'Relay: synced',
+        syncing: 'Relay: syncing…',
+        failed: 'Relay: offline — local only',
+        idle: 'Relay: idle'
+    };
+    el.title = labels[status] || '';
+}
+
 // ============================================
 // Local Encryption
 // ============================================
 
 /**
+ * Set the master password after vault creation, encrypt and save, then go to main screen.
+ */
+function setMasterPassword() {
+    const p1 = document.getElementById('masterPass1').value;
+    const p2 = document.getElementById('masterPass2').value;
+    if (!p1) { showToast('Enter a password'); return; }
+    if (p1 !== p2) { showToast('Passwords don\'t match'); return; }
+
+    _masterPassword = p1;
+    autoSaveVault();
+    showToast('Password set!');
+    showScreen('mainScreen');
+}
+
+/**
+ * Skip master password setup. Vault will not be saved locally.
+ */
+function skipMasterPassword() {
+    _masterPassword = null;
+    showScreen('mainScreen');
+}
+
+/**
+ * Delete all vault data from this device. Double confirmation required.
+ */
+function deleteAllData() {
+    if (!confirm('Delete ALL vault data from this device? This cannot be undone.')) return;
+    if (!confirm('Are you sure? Your locally saved vault will be permanently erased. Cloud backups will NOT be affected.')) return;
+
+    localStorage.removeItem('vaultEncrypted');
+    localStorage.removeItem('vaultNonceBackup');
+    localStorage.removeItem('encryptedDataStorage');
+
+    _masterPassword = null;
+    vault = { privateKey: '', seedPhrase: '', passphrase: '', users: {}, settings: { hashLength: 16 } };
+    nostrKeys = { nsec: '', npub: '' };
+    if (inactivityTimer) clearTimeout(inactivityTimer);
+    inactivityTimer = null;
+    if (clipboardClearTimer) clearTimeout(clipboardClearTimer);
+    clipboardClearTimer = null;
+    navigator.clipboard.writeText('').catch(() => {});
+    navigationStack = ['welcomeScreen'];
+
+    document.querySelectorAll('input, textarea').forEach(el => { el.value = ''; });
+
+    showScreen('welcomeScreen');
+    showToast('All data deleted');
+}
+
+/**
  * Unlock the vault from a locally encrypted backup stored in localStorage.
- * Enforces rate limiting: after MAX_UNLOCK_ATTEMPTS failures, locks out for
- * UNLOCK_LOCKOUT_MS milliseconds.
- *
- * Supports both the new 'vaultEncrypted' storage key and the legacy
- * 'encryptedDataStorage' key for backwards compatibility.
+ * Supports the new single-string format and legacy multi-password JSON format.
  *
  * @returns {Promise<void>}
  */
@@ -1334,31 +1390,46 @@ async function unlockVault() {
     }
 
     try {
-        const key = hash(password);
-        // Check both new and legacy storage keys for backwards compatibility
-        let stored = JSON.parse(localStorage.getItem('vaultEncrypted') || '{}');
-        const legacy = JSON.parse(localStorage.getItem('encryptedDataStorage') || '{}');
-        stored = { ...legacy, ...stored };
-        const encrypted = stored[key];
+        const stored = localStorage.getItem('vaultEncrypted');
+        if (!stored) { showToast('No saved vault found'); return; }
 
-        if (!encrypted) {
-            unlockAttempts++;
-            if (unlockAttempts >= MAX_UNLOCK_ATTEMPTS) {
-                unlockLockoutUntil = Date.now() + UNLOCK_LOCKOUT_MS;
-                unlockAttempts = 0;
-                showToast(`Too many attempts. Locked for 30s`);
-            } else {
-                showToast(`Wrong password (${MAX_UNLOCK_ATTEMPTS - unlockAttempts} attempts left)`);
+        let encrypted = stored;
+        let isLegacy = false;
+
+        // Detect legacy multi-password JSON format vs new raw AES string
+        try {
+            const parsed = JSON.parse(stored);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                // Legacy format: dictionary keyed by password hash
+                const key = hash(password);
+                const legacyStored = JSON.parse(localStorage.getItem('encryptedDataStorage') || '{}');
+                const merged = { ...legacyStored, ...parsed };
+                encrypted = merged[key];
+                if (!encrypted) throw new Error('not found');
+                isLegacy = true;
             }
-            return;
+        } catch (legacyErr) {
+            if (isLegacy) {
+                // Legacy lookup failed — wrong password
+                unlockAttempts++;
+                if (unlockAttempts >= MAX_UNLOCK_ATTEMPTS) {
+                    unlockLockoutUntil = Date.now() + UNLOCK_LOCKOUT_MS;
+                    unlockAttempts = 0;
+                    showToast('Too many attempts. Locked for 30s');
+                } else {
+                    showToast(`Wrong password (${MAX_UNLOCK_ATTEMPTS - unlockAttempts} attempts left)`);
+                }
+                return;
+            }
+            // Not JSON — new format, use stored directly
         }
 
         const decrypted = CryptoJS.AES.decrypt(encrypted, password).toString(CryptoJS.enc.Utf8);
+        if (!decrypted) throw new Error('decrypt failed');
         const data = JSON.parse(decrypted);
 
-        // Handle both new format (users/settings/seedPhrase) and legacy format (privateKey/users)
+        // Handle both data shapes
         if (data.privateKey) {
-            // Legacy format — privateKey was stored directly
             vault.privateKey = data.privateKey;
             vault.seedPhrase = data.seedPhrase || '';
             vault.passphrase = data.passphrase || '';
@@ -1375,58 +1446,33 @@ async function unlockVault() {
         } else {
             nostrKeys = await deriveNostrKeys(vault.privateKey);
         }
+
+        _masterPassword = password;
         unlockAttempts = 0;
+
+        // Migrate legacy format to new single-string format
+        if (isLegacy) {
+            autoSaveVault();
+            localStorage.removeItem('encryptedDataStorage');
+        }
 
         resetInactivityTimer();
         showToast('Vault unlocked!');
         showScreen('mainScreen');
     } catch (e) {
-        // Decrypt errors may include stack traces — guard with debugLog
         debugLog('unlockVault error:', e);
         unlockAttempts++;
         if (unlockAttempts >= MAX_UNLOCK_ATTEMPTS) {
             unlockLockoutUntil = Date.now() + UNLOCK_LOCKOUT_MS;
             unlockAttempts = 0;
-            showToast(`Too many attempts. Locked for 30s`);
+            showToast('Too many attempts. Locked for 30s');
         } else {
             showToast('Invalid password');
         }
     }
 }
 
-/**
- * Encrypt and save the vault to localStorage with a user-chosen password.
- * The vault is keyed by SHA-256(password), allowing multiple password slots.
- * After saving, triggers a background Nostr sync.
- */
-function saveEncrypted() {
-    const pass1 = document.getElementById('encryptPass1').value;
-    const pass2 = document.getElementById('encryptPass2').value;
 
-    if (!pass1 || pass1 !== pass2) {
-        showToast('Passwords don\'t match');
-        return;
-    }
-
-    const key = hash(pass1);
-    // Include privateKey for backwards compatibility with legacy unlock
-    const saveData = {
-        privateKey: vault.privateKey,
-        seedPhrase: vault.seedPhrase,
-        passphrase: vault.passphrase || '',
-        users: vault.users,
-        settings: vault.settings
-    };
-    const encrypted = CryptoJS.AES.encrypt(JSON.stringify(saveData), pass1).toString();
-
-    const stored = JSON.parse(localStorage.getItem('vaultEncrypted') || '{}');
-    stored[key] = encrypted;
-    localStorage.setItem('vaultEncrypted', JSON.stringify(stored));
-
-    showToast('Vault saved!');
-    backupToNostrDebounced();
-    showScreen('settingsScreen');
-}
 
 // ============================================
 // Export & Import
@@ -1483,6 +1529,8 @@ function triggerImport() {
             });
             if (data.settings) vault.settings = { ...vault.settings, ...data.settings };
             renderSiteList();
+            saveLocalNonceBackup();
+            autoSaveVault();
             backupToNostrDebounced();
             showToast(`Imported ${siteCount} site(s)!`);
         } catch (err) {
@@ -1507,6 +1555,7 @@ function saveAdvancedSettings() {
     vault.settings.hashLength = Math.max(8, Math.min(64, len));
     vault.settings.debugMode = debugMode;
     saveLocalNonceBackup();
+    autoSaveVault();
     backupToNostrDebounced();
     showToast('Settings saved');
     showScreen('settingsScreen');
@@ -1848,22 +1897,19 @@ const BACKUP_D_TAG = 'vault-backup';
  * Encrypt and publish vault data to all configured Nostr relays.
  *
  * Double-encryption flow:
- *   Layer 1: AES-256-GCM with PBKDF2(backupPassword, npub) — if backup password is set
- *   Layer 2: NIP-44 self-encrypt (same as before)
- *
- * If no backup password has been set yet, prompts the user to create one (unless silent).
- * Silent backups (background syncs) use the cached backup password from the current session.
- *
+ * NIP-44 self-encryption using the seed-derived Nostr key pair.
  * Falls back gracefully: success on any relay is sufficient.
  *
- * @param {boolean} [silent=false] - If true, suppresses toast notifications and password prompts.
- * @param {string}  [overridePassword=null] - Use this password instead of prompting (for change flow).
+ * @param {boolean} [silent=false] - If true, suppresses toast notifications.
  * @returns {Promise<void>}
  */
-async function backupToNostr(silent = false, overridePassword = null) {
+async function backupToNostr(silent = false) {
     const { nip44, getEventHash, signEvent, getPublicKey } = window.NostrTools;
 
+    console.log(`[relay] backupToNostr: called (silent=${silent})`);
+
     if (!vault.privateKey) {
+        console.log('[relay] backupToNostr: no privateKey, aborting');
         if (!silent) showToast('Vault not initialized');
         return;
     }
@@ -1874,36 +1920,8 @@ async function backupToNostr(silent = false, overridePassword = null) {
 
         const vaultData = JSON.stringify({ users: vault.users, settings: vault.settings });
 
-        // Determine backup password — NEVER fall back to single-layer
-        let backupPwd = overridePassword || _sessionBackupPassword;
-        if (!backupPwd) {
-            if (silent) {
-                // Queue backup for when password becomes available — do NOT send single-layer
-                _pendingBackupAfterPassword = true;
-                const msg = vault.settings.hasBackupPassword
-                    ? '🔒 Backup pending — re-enter backup password. '
-                    : '🔒 Backup pending — set password to sync. ';
-                showBackupPasswordNudge(msg);
-                return;
-            } else {
-                // Interactive — show modal
-                const mode = vault.settings.hasBackupPassword ? 'enter' : 'set';
-                backupPwd = await showBackupPasswordModal(mode);
-                if (!backupPwd) {
-                    showToast('Backup cancelled');
-                    return;
-                }
-                _sessionBackupPassword = backupPwd;
-                vault.settings.hasBackupPassword = true;
-            }
-        }
-
-        // Layer 1: AES-256-GCM with password-derived key (always — no single-layer fallback)
-        const envelope = await encryptWithBackupPassword(vaultData, backupPwd, pk);
-        const layer1Payload = JSON.stringify(envelope);
-
-        // Layer 2: NIP-44 encryption (always)
-        const encrypted = nip44.encrypt(sharedSecret, layer1Payload);
+        // NIP-44 self-encryption — seed-derived key is the only secret needed
+        const encrypted = nip44.encrypt(sharedSecret, vaultData);
 
         const event = {
             kind: 30078,
@@ -1915,21 +1933,40 @@ async function backupToNostr(silent = false, overridePassword = null) {
         event.id = getEventHash(event);
         event.sig = await signEvent(event, sk);
 
+        console.log(`[relay] backupToNostr: starting parallel publish to ${RELAYS.length} relays`);
+        setRelayStatus('syncing');
+
+        if (debugMode) {
+            const nevent = encodeNevent(event.id, RELAYS);
+            const link = nevent ? `https://njump.me/${nevent}` : null;
+            console.log('[debug] [relay] Event created & broadcasting:', {
+                id: event.id,
+                kind: event.kind,
+                pubkey: event.pubkey,
+                created_at: event.created_at,
+                tags: event.tags,
+                link
+            });
+        }
+
         let success = 0;
         let successRelays = [];
-        for (const url of RELAYS) {
-            try {
-                const relay = await connectRelay(url);
-                await Promise.race([
-                    relay.publish(event),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
-                ]);
-                relay.close();
+        const results = await Promise.allSettled(RELAYS.map(async (url) => {
+            const relay = await connectRelay(url);
+            await Promise.race([
+                relay.publish(event),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
+            ]);
+            relay.close();
+            return url;
+        }));
+        for (const r of results) {
+            if (r.status === 'fulfilled') {
                 success++;
-                successRelays.push(url);
-                debugLog(`backupToNostr: published to ${url}`);
-            } catch (e) {
-                console.error(`backupToNostr: failed on relay [${url}]`, e);
+                successRelays.push(r.value);
+                debugLog(`backupToNostr: published to ${r.value}`);
+            } else {
+                debugLog(`backupToNostr: relay failed:`, r.reason);
             }
         }
 
@@ -1938,6 +1975,7 @@ async function backupToNostr(silent = false, overridePassword = null) {
         if (success > 0) {
             vault.settings.lastBackupFailed = false;
             updateBackupWarningIndicator();
+            setRelayStatus('synced');
             if (!silent) showToast(`Backed up to ${success} relays`);
 
             if (debugMode) {
@@ -1952,37 +1990,17 @@ async function backupToNostr(silent = false, overridePassword = null) {
                 }
             }
         } else {
-            if (silent) {
-                vault.settings.lastBackupFailed = true;
-                updateBackupWarningIndicator();
-            }
+            vault.settings.lastBackupFailed = true;
+            updateBackupWarningIndicator();
+            setRelayStatus('failed');
             if (!silent) showToast('Backup failed');
         }
     } catch (e) {
         debugLog('backupToNostr: unexpected error:', e);
+        setRelayStatus('failed');
         if (!silent) showToast('Backup error');
     }
 }
-
-/**
- * Change the backup password: prompt for new password, re-encrypt, and re-publish.
- */
-async function changeBackupPassword() {
-    if (!vault.privateKey) {
-        showToast('Vault not initialized');
-        return;
-    }
-    const newPassword = await showBackupPasswordModal('change');
-    if (!newPassword) return;
-
-    _sessionBackupPassword = newPassword;
-    vault.settings.hasBackupPassword = true;
-    showToast('Re-encrypting...');
-    await backupToNostr(false, newPassword);
-}
-
-// Session-only backup password cache — never persisted to storage
-let _sessionBackupPassword = null;
 
 /**
  * Decrypt a backup event, auto-detecting format:
@@ -2016,9 +2034,9 @@ async function decryptBackupEvent(event, sk, pk, interactive = true) {
         return layer2Decrypted;
     }
 
-    // Double-encrypted: need backup password
-    let backupPwd = _sessionBackupPassword;
-    if (!backupPwd && interactive) {
+    // Legacy double-encrypted backup: need backup password to decrypt Layer 1
+    let backupPwd = null;
+    if (interactive) {
         backupPwd = await showBackupPasswordModal('enter');
         if (!backupPwd) throw new Error('Backup password required but cancelled');
     }
@@ -2028,9 +2046,6 @@ async function decryptBackupEvent(event, sk, pk, interactive = true) {
 
     try {
         const decrypted = await decryptWithBackupPassword(envelope, backupPwd, pk);
-        // Cache the successful password for this session
-        _sessionBackupPassword = backupPwd;
-        vault.settings.hasBackupPassword = true;
         return decrypted;
     } catch (e) {
         // Auth tag mismatch = wrong password
@@ -2102,6 +2117,7 @@ async function restoreFromNostr() {
             vault.users = { ...vault.users, ...data.users };
             if (data.settings) vault.settings = { ...vault.settings, ...data.settings };
             saveLocalNonceBackup();
+            autoSaveVault();
             if (usedLegacy) {
                 showToast('Found backup from previous version — upgrading key derivation');
                 backupToNostrDebounced();
@@ -2261,6 +2277,7 @@ async function restoreFromId(eventId, eventKind) {
             vault.users = data.users || vault.users;
             if (data.settings) vault.settings = { ...vault.settings, ...data.settings };
             saveLocalNonceBackup();
+            autoSaveVault();
             showToast('Restored!');
             showScreen('mainScreen');
         } else {
@@ -2446,8 +2463,9 @@ function selectSuggestion(word) {
  */
 function resetInactivityTimer() {
     if (inactivityTimer) clearTimeout(inactivityTimer);
-    // Only set timer if vault is unlocked (privateKey present)
-    if (vault.privateKey) {
+    // Only set timer if vault is unlocked AND a master password exists
+    // (no-password sessions can't be recovered after lock, so don't auto-lock them)
+    if (vault.privateKey && _masterPassword) {
         inactivityTimer = setTimeout(() => {
             lockVault(true);
         }, INACTIVITY_TIMEOUT_MS);
@@ -2470,10 +2488,11 @@ function setupInactivityListeners() {
     });
 
     // Lock vault when tab is hidden for too long (e.g. user switches app)
+    // Skip for no-password sessions — they can't be recovered after lock.
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
             hiddenAt = Date.now();
-        } else if (hiddenAt && vault.privateKey) {
+        } else if (hiddenAt && vault.privateKey && _masterPassword) {
             const elapsed = Date.now() - hiddenAt;
             hiddenAt = null;
             if (elapsed >= VISIBILITY_LOCK_MS) {
@@ -2585,12 +2604,14 @@ document.addEventListener('DOMContentLoaded', () => {
         btnBackupToNostr: () => backupToNostr(),
         btnRestoreFromNostr: () => restoreFromNostr(),
         btnOpenNostrHistory: () => openNostrHistory(),
-        btnSaveEncrypted: () => saveEncrypted(),
+        btnSetMasterPassword: () => setMasterPassword(),
+        btnSkipMasterPassword: () => skipMasterPassword(),
+        btnDeleteAllData: () => deleteAllData(),
+        btnDeleteAllDataUnlock: () => deleteAllData(),
         btnDownloadData: () => downloadData(),
         btnTriggerImport: () => triggerImport(),
         btnSaveAdvancedSettings: () => saveAdvancedSettings(),
         btnCopySeedPhrase: () => copySeedPhrase(),
-        btnChangeBackupPassword: () => changeBackupPassword(),
     };
 
     Object.entries(btnBindings).forEach(([id, handler]) => {
@@ -2632,17 +2653,17 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    const encryptPass1 = document.getElementById('encryptPass1');
-    if (encryptPass1) {
-        encryptPass1.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') document.getElementById('encryptPass2').focus();
+    const masterPass1 = document.getElementById('masterPass1');
+    if (masterPass1) {
+        masterPass1.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') document.getElementById('masterPass2').focus();
         });
     }
 
-    const encryptPass2 = document.getElementById('encryptPass2');
-    if (encryptPass2) {
-        encryptPass2.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') saveEncrypted();
+    const masterPass2 = document.getElementById('masterPass2');
+    if (masterPass2) {
+        masterPass2.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') setMasterPassword();
         });
     }
 
@@ -2663,11 +2684,12 @@ document.addEventListener('DOMContentLoaded', () => {
         navigator.serviceWorker.register('sw.js').catch(() => {});
     }
 
-    // Check if there's saved encrypted data
-    const stored = localStorage.getItem('vaultEncrypted');
-    const legacy = localStorage.getItem('encryptedDataStorage');
-    if ((stored && Object.keys(JSON.parse(stored)).length > 0) ||
-        (legacy && Object.keys(JSON.parse(legacy)).length > 0)) {
-        // Could highlight unlock option
+    // Auto-show unlock screen if encrypted vault exists
+    const storedVault = localStorage.getItem('vaultEncrypted');
+    const legacyVault = localStorage.getItem('encryptedDataStorage');
+    if (storedVault || legacyVault) {
+        navigationStack = ['unlockScreen'];
+        history.replaceState({ screen: 'unlockScreen' }, '');
+        showScreen('unlockScreen');
     }
 });
