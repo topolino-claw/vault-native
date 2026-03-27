@@ -130,6 +130,36 @@ function showToast(message) {
 }
 
 /**
+ * Show an in-app confirmation dialog (replaces native confirm() which
+ * may not work in Tauri / Android WebView).
+ *
+ * @param {string} message - The text to display.
+ * @returns {Promise<boolean>} Resolves true for OK, false for Cancel.
+ */
+function showConfirm(message) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('confirmModal');
+        document.getElementById('confirmText').textContent = message;
+        modal.classList.remove('hidden');
+
+        const cleanup = (result) => {
+            modal.classList.add('hidden');
+            okBtn.removeEventListener('click', onOk);
+            cancelBtn.removeEventListener('click', onCancel);
+            resolve(result);
+        };
+
+        const onOk = () => cleanup(true);
+        const onCancel = () => cleanup(false);
+
+        const okBtn = document.getElementById('confirmOk');
+        const cancelBtn = document.getElementById('confirmCancel');
+        okBtn.addEventListener('click', onOk);
+        cancelBtn.addEventListener('click', onCancel);
+    });
+}
+
+/**
  * Show the fullscreen loading modal with a status message.
  *
  * @param {string} text - Loading text shown inside the modal.
@@ -536,7 +566,7 @@ function getPasswordStrength(hashLength) {
 async function generateNewSeed(isInitial = false) {
     // Only confirm if there's already a seed loaded (re-generating)
     if (!isInitial && vault.seedPhrase && vault.privateKey) {
-        if (!confirm('Generate a new seed phrase? This will replace the current one.')) return;
+        if (!await showConfirm('Generate a new seed phrase? This will replace the current one.')) return;
     }
     const mnemonic = await generateMnemonic();
     vault.seedPhrase = mnemonic;
@@ -851,14 +881,14 @@ async function silentRestoreFromNostr() {
  *
  * @param {boolean} [skipConfirm=false] - If true, skip the confirmation dialog.
  */
-function lockVault(skipConfirm = false) {
+async function lockVault(skipConfirm = false) {
     // No-password sessions: vault lives only in memory and cannot be recovered.
     if (!_masterPassword && vault.privateKey) {
         // Auto-lock (inactivity / visibility): silently skip — nothing to unlock against.
         if (skipConfirm) return;
 
         // Manual lock: warn clearly and redirect to set a password first.
-        const choice = confirm(
+        const choice = await showConfirm(
             'No master password is set!\n\n' +
             'Your vault exists only in memory and will be PERMANENTLY LOST if you lock now.\n\n' +
             'Press OK to set a password first, or Cancel to lock anyway (destroys vault).'
@@ -869,20 +899,20 @@ function lockVault(skipConfirm = false) {
             return;
         }
         // They chose "Cancel" = lock anyway — give one more explicit chance.
-        if (!confirm(
+        if (!await showConfirm(
             'ARE YOU SURE?\n\n' +
             'Without a saved password your vault CANNOT be recovered ' +
             'unless you have your seed phrase.\n\n' +
             'Lock and destroy vault?'
         )) return;
     } else if (!skipConfirm && vault.privateKey) {
-        if (!confirm('Lock vault? Make sure you have your seed phrase saved.')) return;
+        if (!await showConfirm('Lock vault? You\'ll need your password to unlock again.')) return;
     }
     if (inactivityTimer) clearTimeout(inactivityTimer);
     inactivityTimer = null;
     if (clipboardClearTimer) clearTimeout(clipboardClearTimer);
     clipboardClearTimer = null;
-    navigator.clipboard.writeText('').catch(() => {});
+    try { navigator.clipboard.writeText('').catch(() => {}); } catch (_) {}
     // Wipe all sensitive data from memory
     vault = { privateKey: '', seedPhrase: '', passphrase: '', users: {}, settings: { hashLength: 16 } };
     nostrKeys = { nsec: '', npub: '' };
@@ -1235,8 +1265,8 @@ function saveAndCopy() {
  * @param {string} site - Site name to delete.
  * @param {string} user - Username the site is associated with.
  */
-function deleteSite(site, user) {
-    if (!confirm(`Delete ${site} (${user})?`)) return;
+async function deleteSite(site, user) {
+    if (!await showConfirm(`Delete ${site} (${user})?`)) return;
 
     if (vault.users[user]) {
         delete vault.users[user][site];
@@ -1344,9 +1374,9 @@ function skipMasterPassword() {
 /**
  * Delete all vault data from this device. Double confirmation required.
  */
-function deleteAllData() {
-    if (!confirm('Delete ALL vault data from this device? This cannot be undone.')) return;
-    if (!confirm('Are you sure? Your locally saved vault will be permanently erased. Cloud backups will NOT be affected.')) return;
+async function deleteAllData() {
+    if (!await showConfirm('Delete ALL vault data from this device? This cannot be undone.')) return;
+    if (!await showConfirm('Are you sure? Your locally saved vault will be permanently erased. Cloud backups will NOT be affected.')) return;
 
     localStorage.removeItem('vaultEncrypted');
     localStorage.removeItem('vaultNonceBackup');
@@ -1359,7 +1389,7 @@ function deleteAllData() {
     inactivityTimer = null;
     if (clipboardClearTimer) clearTimeout(clipboardClearTimer);
     clipboardClearTimer = null;
-    navigator.clipboard.writeText('').catch(() => {});
+    try { navigator.clipboard.writeText('').catch(() => {}); } catch (_) {}
     navigationStack = ['welcomeScreen'];
 
     document.querySelectorAll('input, textarea').forEach(el => { el.value = ''; });
@@ -1516,7 +1546,7 @@ function triggerImport() {
                 return;
             }
             const siteCount = Object.values(data.users).reduce((n, u) => n + Object.keys(u).length, 0);
-            if (!confirm(`Import ${siteCount} site(s)? This will merge with your current vault.`)) return;
+            if (!await showConfirm(`Import ${siteCount} site(s)? This will merge with your current vault.`)) return;
             // Merge users — higher nonce wins (more recent password rotation)
             Object.entries(data.users).forEach(([user, sites]) => {
                 if (!vault.users[user]) vault.users[user] = {};
@@ -1982,8 +2012,8 @@ async function backupToNostr(silent = false) {
                 const nevent = encodeNevent(event.id, successRelays);
                 if (nevent) {
                     const link = `https://njump.me/${nevent}`;
-                    setTimeout(() => {
-                        if (confirm(`Debug: View event on njump.me?\n\n${event.id.slice(0, 32)}...`)) {
+                    setTimeout(async () => {
+                        if (await showConfirm(`Debug: View event on njump.me?\n\n${event.id.slice(0, 32)}...`)) {
                             window.open(link, '_blank');
                         }
                     }, 500);

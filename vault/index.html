@@ -75,110 +75,114 @@
             .bg-orb {
                 position: absolute;
                 border-radius: 50%;
-                filter: blur(60px);
-                background: rgba(255, 255, 255, 0.07);
+                background: rgba(255, 255, 255, 0.15);
+                filter: blur(30px);
             }
 
             .bg-orb-1 {
-                width: 300px;
-                height: 300px;
-                top: -5%;
-                left: 10%;
-                animation: orbFloat1 12s ease-in-out infinite;
+                width: 180px;
+                height: 180px;
+                top: 5%;
+                left: 5%;
+                animation: orbFloat1 14s ease-in-out infinite;
             }
 
             .bg-orb-2 {
-                width: 250px;
-                height: 250px;
-                bottom: 5%;
-                right: 5%;
-                animation: orbFloat2 15s ease-in-out infinite;
+                width: 140px;
+                height: 140px;
+                bottom: 10%;
+                right: 8%;
+                background: rgba(255, 255, 255, 0.12);
+                animation: orbFloat2 18s ease-in-out infinite;
             }
 
             .bg-orb-3 {
-                width: 180px;
-                height: 180px;
-                top: 40%;
-                left: 65%;
-                filter: blur(50px);
-                background: rgba(255, 255, 255, 0.05);
-                animation: orbFloat3 10s ease-in-out infinite;
+                width: 100px;
+                height: 100px;
+                top: 35%;
+                right: 5%;
+                filter: blur(22px);
+                background: rgba(255, 255, 255, 0.18);
+                animation: orbFloat3 11s ease-in-out infinite;
             }
 
             .bg-orb-4 {
-                width: 220px;
-                height: 220px;
-                top: 20%;
-                left: -5%;
-                filter: blur(55px);
-                background: rgba(255, 255, 255, 0.06);
-                animation: orbFloat4 13s ease-in-out infinite;
+                width: 120px;
+                height: 120px;
+                top: 60%;
+                left: 2%;
+                filter: blur(25px);
+                background: rgba(255, 255, 255, 0.13);
+                animation: orbFloat4 15s ease-in-out infinite;
             }
 
-            .bg-grid {
-                position: absolute;
-                inset: 0;
-                background-image: linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
-                                  linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
-                background-size: 60px 60px;
-                -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 50%, black, transparent);
-                mask-image: radial-gradient(ellipse 70% 60% at 50% 50%, black, transparent);
-                animation: gridPulse 8s ease-in-out infinite;
+            .bg-orb-5 {
+                width: 70px;
+                height: 70px;
+                top: 12%;
+                right: 12%;
+                filter: blur(16px);
+                background: rgba(255, 255, 255, 0.2);
+                animation: orbFloat5 9s ease-in-out infinite;
             }
 
-            .bg-shimmer {
-                position: absolute;
-                top: 0;
-                left: -100%;
-                width: 50%;
-                height: 100%;
-                background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.03), rgba(255,255,255,0.02), transparent);
-                animation: shimmer 12s ease-in-out infinite;
-                transform: skewX(-15deg);
+            .bg-orb-6 {
+                width: 60px;
+                height: 60px;
+                bottom: 30%;
+                left: 25%;
+                filter: blur(14px);
+                background: rgba(255, 255, 255, 0.17);
+                animation: orbFloat6 12s ease-in-out infinite;
             }
 
             @keyframes orbFloat1 {
                 0% { transform: translate(0, 0) scale(1); }
-                15% { transform: translate(150px, 80px) scale(1.2); }
-                35% { transform: translate(60px, 200px) scale(0.8); }
-                55% { transform: translate(-100px, 150px) scale(1.1); }
-                75% { transform: translate(-50px, 40px) scale(0.9); }
+                15% { transform: translate(160px, 100px) scale(1.3); }
+                35% { transform: translate(80px, 250px) scale(0.7); }
+                55% { transform: translate(-120px, 180px) scale(1.15); }
+                75% { transform: translate(-60px, 50px) scale(0.85); }
                 100% { transform: translate(0, 0) scale(1); }
             }
 
             @keyframes orbFloat2 {
                 0% { transform: translate(0, 0) scale(1); }
-                20% { transform: translate(-120px, -100px) scale(1.3); }
-                40% { transform: translate(-200px, -30px) scale(0.7); }
-                60% { transform: translate(-80px, -180px) scale(1.15); }
-                80% { transform: translate(50px, -60px) scale(0.85); }
+                20% { transform: translate(-140px, -120px) scale(1.4); }
+                40% { transform: translate(-220px, -40px) scale(0.6); }
+                60% { transform: translate(-100px, -200px) scale(1.2); }
+                80% { transform: translate(60px, -80px) scale(0.8); }
                 100% { transform: translate(0, 0) scale(1); }
             }
 
             @keyframes orbFloat3 {
                 0% { transform: translate(0, 0) scale(1); }
-                20% { transform: translate(-180px, -80px) scale(1.3); }
-                45% { transform: translate(-60px, 100px) scale(0.7); }
-                70% { transform: translate(80px, -50px) scale(1.2); }
+                20% { transform: translate(-200px, -100px) scale(1.4); }
+                45% { transform: translate(-80px, 120px) scale(0.6); }
+                70% { transform: translate(100px, -60px) scale(1.3); }
                 100% { transform: translate(0, 0) scale(1); }
             }
 
             @keyframes orbFloat4 {
                 0% { transform: translate(0, 0) scale(1); }
-                25% { transform: translate(140px, -120px) scale(1.2); }
-                50% { transform: translate(200px, 50px) scale(0.8); }
-                75% { transform: translate(80px, 130px) scale(1.15); }
+                25% { transform: translate(160px, -140px) scale(1.3); }
+                50% { transform: translate(240px, 60px) scale(0.7); }
+                75% { transform: translate(100px, 160px) scale(1.2); }
                 100% { transform: translate(0, 0) scale(1); }
             }
 
-            @keyframes gridPulse {
-                0%, 100% { opacity: 1; }
-                50% { opacity: 0.4; }
+            @keyframes orbFloat5 {
+                0% { transform: translate(0, 0) scale(1); }
+                30% { transform: translate(-130px, 100px) scale(1.5); }
+                60% { transform: translate(80px, 180px) scale(0.7); }
+                100% { transform: translate(0, 0) scale(1); }
             }
 
-            @keyframes shimmer {
-                0% { left: -50%; }
-                40%, 100% { left: 150%; }
+            @keyframes orbFloat6 {
+                0% { transform: translate(0, 0) scale(1); }
+                25% { transform: translate(120px, -90px) scale(1.4); }
+                55% { transform: translate(-60px, -150px) scale(0.8); }
+                80% { transform: translate(-140px, 40px) scale(1.2); }
+                100% { transform: translate(0, 0) scale(1); }
             }
 
             .app-container {
@@ -825,6 +829,17 @@
             color: var(--text-muted);
             font-family: 'SF Mono', 'Fira Code', monospace;
         }
+
+        .confirm-buttons {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+            justify-content: center;
+        }
+
+        .confirm-buttons .btn {
+            min-width: 100px;
+        }
     </style>
 </head>
 <body>
@@ -834,6 +849,8 @@
         <div class="bg-orb bg-orb-2"></div>
         <div class="bg-orb bg-orb-3"></div>
         <div class="bg-orb bg-orb-4"></div>
+        <div class="bg-orb bg-orb-5"></div>
+        <div class="bg-orb bg-orb-6"></div>
         <div class="bg-grid"></div>
         <div class="bg-shimmer"></div>
     </div>
@@ -841,6 +858,17 @@
     <div class="app-container">
     <!-- Toast Notification -->
     <div id="toast" class="toast">Copied!</div>
+
+    <!-- Confirm Modal -->
+    <div id="confirmModal" class="modal hidden">
+        <div class="modal-content">
+            <p id="confirmText"></p>
+            <div class="confirm-buttons">
+                <button class="btn btn-ghost" id="confirmCancel">Cancel</button>
+                <button class="btn btn-primary" id="confirmOk">OK</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Loading Modal -->
     <div id="loadingModal" class="modal hidden">
