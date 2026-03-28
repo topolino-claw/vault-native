@@ -9,7 +9,7 @@
   },
   "app": {
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' wss: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+      "csp": "default-src 'self'; connect-src 'self' wss: https:; script-src 'self'; style-src 'self' 'unsafe-inline'"
     },
     "windows": [
       {

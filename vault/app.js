@@ -37,6 +37,23 @@ const VISIBILITY_LOCK_MS = 2 * 60 * 1000; // 2 minutes hidden = lock
 const MAX_UNLOCK_ATTEMPTS = 5;
 const UNLOCK_LOCKOUT_MS = 30 * 1000; // 30 seconds
 const DEFAULT_HASH_LENGTH = 16;
+const MIN_PASSWORD_LENGTH = 8;
+
+/**
+ * Deep-merge remote users into vault.users — higher nonce wins.
+ * @param {Object} remoteUsers - { user: { site: nonce, ... }, ... }
+ */
+function mergeUsers(remoteUsers) {
+    if (!remoteUsers) return;
+    Object.entries(remoteUsers).forEach(([user, sites]) => {
+        if (!vault.users[user]) vault.users[user] = {};
+        Object.entries(sites).forEach(([site, nonce]) => {
+            if (vault.users[user][site] === undefined || nonce > vault.users[user][site]) {
+                vault.users[user][site] = nonce;
+            }
+        });
+    });
+}
 
 const RELAYS = [
     "wss://relay.damus.io",
@@ -87,7 +104,9 @@ function showScreen(screenId) {
     }
 
     // Screen-specific setup
-    if (screenId === 'mainScreen') {
+    if (screenId === 'welcomeScreen') {
+        updateWelcomeState();
+    } else if (screenId === 'mainScreen') {
         renderSiteList();
     } else if (screenId === 'newWalletScreen') {
         generateNewSeed(true);
@@ -112,6 +131,23 @@ function goBack() {
     showScreen(prev);
 }
 
+/**
+ * Toggle the welcome screen between "create/restore" and "unlock" states
+ * based on whether an encrypted vault exists in localStorage.
+ */
+function updateWelcomeState() {
+    const hasVault = localStorage.getItem('vaultEncrypted') || localStorage.getItem('encryptedDataStorage');
+    const welcomeNew = document.getElementById('welcomeNew');
+    const welcomeUnlock = document.getElementById('welcomeUnlock');
+    if (hasVault) {
+        welcomeNew.classList.add('hidden');
+        welcomeUnlock.classList.remove('hidden');
+    } else {
+        welcomeNew.classList.remove('hidden');
+        welcomeUnlock.classList.add('hidden');
+    }
+}
+
 // ============================================
 // Toast
 // ============================================
@@ -134,16 +170,36 @@ function showToast(message) {
  * may not work in Tauri / Android WebView).
  *
  * @param {string} message - The text to display.
+ * @param {object} [options] - Optional button customization.
+ * @param {string} [options.okLabel='OK'] - Label for the OK button.
+ * @param {string} [options.cancelLabel='Cancel'] - Label for the Cancel button.
+ * @param {boolean} [options.cancelDanger=false] - Style Cancel as a danger button.
  * @returns {Promise<boolean>} Resolves true for OK, false for Cancel.
  */
-function showConfirm(message) {
+function showConfirm(message, options = {}) {
     return new Promise((resolve) => {
         const modal = document.getElementById('confirmModal');
         document.getElementById('confirmText').textContent = message;
+
+        const okBtn = document.getElementById('confirmOk');
+        const cancelBtn = document.getElementById('confirmCancel');
+
+        okBtn.textContent = options.okLabel || 'OK';
+        cancelBtn.textContent = options.cancelLabel || 'Cancel';
+
+        if (options.cancelDanger) {
+            cancelBtn.classList.add('btn-danger');
+            cancelBtn.classList.remove('btn-ghost');
+        }
+
         modal.classList.remove('hidden');
 
         const cleanup = (result) => {
             modal.classList.add('hidden');
+            okBtn.textContent = 'OK';
+            cancelBtn.textContent = 'Cancel';
+            cancelBtn.classList.remove('btn-danger');
+            cancelBtn.classList.add('btn-ghost');
             okBtn.removeEventListener('click', onOk);
             cancelBtn.removeEventListener('click', onCancel);
             resolve(result);
@@ -152,8 +208,6 @@ function showConfirm(message) {
         const onOk = () => cleanup(true);
         const onCancel = () => cleanup(false);
 
-        const okBtn = document.getElementById('confirmOk');
-        const cancelBtn = document.getElementById('confirmCancel');
         okBtn.addEventListener('click', onOk);
         cancelBtn.addEventListener('click', onCancel);
     });
@@ -710,8 +764,14 @@ async function initializeVault(seedPhrase, passphrase = '') {
         const localBackupRaw = localStorage.getItem('vaultNonceBackup');
         if (localBackupRaw) {
             debugLog('initializeVault: local nonce backup found, attempting merge');
-            const decrypted = CryptoJS.AES.decrypt(localBackupRaw, vault.privateKey)
-                .toString(CryptoJS.enc.Utf8);
+            let decrypted;
+            if (isWebCryptoEnvelope(localBackupRaw)) {
+                decrypted = await decryptLocal(localBackupRaw, vault.privateKey);
+            } else {
+                // Legacy CryptoJS format — decrypt and migrate
+                decrypted = CryptoJS.AES.decrypt(localBackupRaw, vault.privateKey)
+                    .toString(CryptoJS.enc.Utf8);
+            }
             if (decrypted) {
                 const localData = JSON.parse(decrypted);
                 // Merge users — only adopt local nonces if not already present in vault
@@ -731,6 +791,11 @@ async function initializeVault(seedPhrase, passphrase = '') {
                     vault.settings = { ...localData.settings, ...vault.settings };
                 }
                 debugLog('initializeVault: local backup merged');
+                // Migrate legacy format to Web Crypto
+                if (!isWebCryptoEnvelope(localBackupRaw)) {
+                    await saveLocalNonceBackup();
+                    debugLog('initializeVault: migrated nonce backup to Web Crypto');
+                }
             }
         }
     } catch (e) {
@@ -817,26 +882,26 @@ async function silentRestoreFromNostr() {
         try {
             const decrypted = await decryptBackupEvent(event, decryptSk, decryptPk, false);
             const data = JSON.parse(decrypted);
-            vault.users = { ...vault.users, ...data.users };
+            mergeUsers(data.users);
             if (data.settings) {
                 vault.settings = { ...vault.settings, ...data.settings };
                 debugMode = vault.settings.debugMode || false;
             }
-            saveLocalNonceBackup();
-            autoSaveVault();
+            await saveLocalNonceBackup();
+            await autoSaveVault();
             return { found: true };
         } catch (e) {
             if (e.message && e.message.includes('password')) {
                 try {
                     const decrypted = await decryptBackupEvent(event, decryptSk, decryptPk, true);
                     const data = JSON.parse(decrypted);
-                    vault.users = { ...vault.users, ...data.users };
+                    mergeUsers(data.users);
                     if (data.settings) {
                         vault.settings = { ...vault.settings, ...data.settings };
                         debugMode = vault.settings.debugMode || false;
                     }
-                    saveLocalNonceBackup();
-                    autoSaveVault();
+                    await saveLocalNonceBackup();
+                    await autoSaveVault();
                     return { found: true };
                 } catch (e2) {
                     debugLog('silentRestoreFromNostr: interactive decrypt failed:', e2);
@@ -887,24 +952,17 @@ async function lockVault(skipConfirm = false) {
         // Auto-lock (inactivity / visibility): silently skip — nothing to unlock against.
         if (skipConfirm) return;
 
-        // Manual lock: warn clearly and redirect to set a password first.
+        // Manual lock: single clear dialog with action-oriented buttons.
         const choice = await showConfirm(
             'No master password is set!\n\n' +
             'Your vault exists only in memory and will be PERMANENTLY LOST if you lock now.\n\n' +
-            'Press OK to set a password first, or Cancel to lock anyway (destroys vault).'
+            'Set a password to protect your vault, or lock anyway (destroys vault).',
+            { okLabel: 'Set Password', cancelLabel: 'Lock Anyway', cancelDanger: true }
         );
         if (choice) {
-            // Send them to the password setup screen instead of locking.
             showScreen('setMasterPasswordScreen');
             return;
         }
-        // They chose "Cancel" = lock anyway — give one more explicit chance.
-        if (!await showConfirm(
-            'ARE YOU SURE?\n\n' +
-            'Without a saved password your vault CANNOT be recovered ' +
-            'unless you have your seed phrase.\n\n' +
-            'Lock and destroy vault?'
-        )) return;
     } else if (!skipConfirm && vault.privateKey) {
         if (!await showConfirm('Lock vault? You\'ll need your password to unlock again.')) return;
     }
@@ -917,6 +975,9 @@ async function lockVault(skipConfirm = false) {
     vault = { privateKey: '', seedPhrase: '', passphrase: '', users: {}, settings: { hashLength: 16 } };
     nostrKeys = { nsec: '', npub: '' };
     _masterPassword = null;
+    _cachedLocalKey = null;
+    _cachedLocalSalt = null;
+    _cachedLocalPassphrase = null;
 
     // Wipe all sensitive data from DOM
     document.querySelectorAll('input, textarea').forEach(el => { el.value = ''; });
@@ -933,10 +994,8 @@ async function lockVault(skipConfirm = false) {
         });
     });
 
-    const hasLocalVault = !!localStorage.getItem('vaultEncrypted');
-    const targetScreen = hasLocalVault ? 'unlockScreen' : 'welcomeScreen';
-    navigationStack = [targetScreen];
-    showScreen(targetScreen);
+    navigationStack = ['welcomeScreen'];
+    showScreen('welcomeScreen');
     showToast('Vault locked');
 }
 
@@ -959,12 +1018,11 @@ async function lockVault(skipConfirm = false) {
  *   - Any successful Nostr restore (data changed)
  *   - copyPassword() (nonce may have changed)
  */
-function saveLocalNonceBackup() {
+async function saveLocalNonceBackup() {
     if (!vault.privateKey) return;
     try {
         const payload = JSON.stringify({ users: vault.users, settings: vault.settings });
-        // Encrypt with the private key — only someone with the seed phrase can decrypt
-        const encrypted = CryptoJS.AES.encrypt(payload, vault.privateKey).toString();
+        const encrypted = await encryptLocal(payload, vault.privateKey);
         localStorage.setItem('vaultNonceBackup', encrypted);
         debugLog('saveLocalNonceBackup: local backup saved');
     } catch (e) {
@@ -977,7 +1035,7 @@ function saveLocalNonceBackup() {
  * Auto-save the full vault to localStorage, encrypted with the master password.
  * Called after every vault data mutation. No-op if the user skipped password setup.
  */
-function autoSaveVault() {
+async function autoSaveVault() {
     if (!_masterPassword || !vault.privateKey) return;
     try {
         const saveData = {
@@ -987,7 +1045,7 @@ function autoSaveVault() {
             users: vault.users,
             settings: vault.settings
         };
-        const encrypted = CryptoJS.AES.encrypt(JSON.stringify(saveData), _masterPassword).toString();
+        const encrypted = await encryptLocal(JSON.stringify(saveData), _masterPassword);
         localStorage.setItem('vaultEncrypted', encrypted);
         debugLog('autoSaveVault: saved');
     } catch (e) {
@@ -1210,7 +1268,7 @@ function decrementNonce() {
  * Saves the current nonce under vault.users[user][site] so the same password
  * can be reproduced later. The clipboard is auto-cleared after 30 seconds.
  */
-function copyPassword() {
+async function copyPassword() {
     const site = document.getElementById('genSite').value.trim();
     const user = document.getElementById('genUser').value.trim();
 
@@ -1242,8 +1300,8 @@ function copyPassword() {
     });
 
     // Persist nonce changes to local backup immediately (nonce may have changed)
-    saveLocalNonceBackup();
-    autoSaveVault();
+    await saveLocalNonceBackup();
+    await autoSaveVault();
 
     // Background sync to Nostr
     backupToNostrDebounced();
@@ -1278,8 +1336,8 @@ async function deleteSite(site, user) {
 
     showToast('Site deleted');
     renderSiteList();
-    saveLocalNonceBackup();
-    autoSaveVault();
+    await saveLocalNonceBackup();
+    await autoSaveVault();
     backupToNostrDebounced();
 }
 
@@ -1351,23 +1409,19 @@ function setRelayStatus(status) {
 /**
  * Set the master password after vault creation, encrypt and save, then go to main screen.
  */
-function setMasterPassword() {
+async function setMasterPassword() {
     const p1 = document.getElementById('masterPass1').value;
     const p2 = document.getElementById('masterPass2').value;
     if (!p1) { showToast('Enter a password'); return; }
+    if (p1.length < MIN_PASSWORD_LENGTH) {
+        showToast(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+        return;
+    }
     if (p1 !== p2) { showToast('Passwords don\'t match'); return; }
 
     _masterPassword = p1;
-    autoSaveVault();
+    await autoSaveVault();
     showToast('Password set!');
-    showScreen('mainScreen');
-}
-
-/**
- * Skip master password setup. Vault will not be saved locally.
- */
-function skipMasterPassword() {
-    _masterPassword = null;
     showScreen('mainScreen');
 }
 
@@ -1423,40 +1477,55 @@ async function unlockVault() {
         const stored = localStorage.getItem('vaultEncrypted');
         if (!stored) { showToast('No saved vault found'); return; }
 
-        let encrypted = stored;
-        let isLegacy = false;
+        let data;
+        let needsMigration = false;
 
-        // Detect legacy multi-password JSON format vs new raw AES string
-        try {
-            const parsed = JSON.parse(stored);
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-                // Legacy format: dictionary keyed by password hash
-                const key = hash(password);
-                const legacyStored = JSON.parse(localStorage.getItem('encryptedDataStorage') || '{}');
-                const merged = { ...legacyStored, ...parsed };
-                encrypted = merged[key];
-                if (!encrypted) throw new Error('not found');
-                isLegacy = true;
-            }
-        } catch (legacyErr) {
-            if (isLegacy) {
-                // Legacy lookup failed — wrong password
-                unlockAttempts++;
-                if (unlockAttempts >= MAX_UNLOCK_ATTEMPTS) {
-                    unlockLockoutUntil = Date.now() + UNLOCK_LOCKOUT_MS;
-                    unlockAttempts = 0;
-                    showToast('Too many attempts. Locked for 30s');
-                } else {
-                    showToast(`Wrong password (${MAX_UNLOCK_ATTEMPTS - unlockAttempts} attempts left)`);
+        if (isWebCryptoEnvelope(stored)) {
+            // v3 Web Crypto format
+            const decrypted = await decryptLocal(stored, password);
+            if (!decrypted) throw new Error('decrypt failed');
+            data = JSON.parse(decrypted);
+        } else {
+            // Legacy CryptoJS or multi-password JSON format
+            needsMigration = true;
+            let encrypted = stored;
+            let isLegacy = false;
+
+            try {
+                const parsed = JSON.parse(stored);
+                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
+                    parsed.v !== LOCAL_ENCRYPT_VERSION) {
+                    // Legacy format: dictionary keyed by password hash
+                    const key = hash(password);
+                    const legacyStored = JSON.parse(localStorage.getItem('encryptedDataStorage') || '{}');
+                    const merged = { ...legacyStored, ...parsed };
+                    encrypted = merged[key];
+                    if (!encrypted) throw new Error('not found');
+                    isLegacy = true;
                 }
-                return;
+            } catch (legacyErr) {
+                if (isLegacy) {
+                    unlockAttempts++;
+                    if (unlockAttempts >= MAX_UNLOCK_ATTEMPTS) {
+                        unlockLockoutUntil = Date.now() + UNLOCK_LOCKOUT_MS;
+                        unlockAttempts = 0;
+                        showToast('Too many attempts. Locked for 30s');
+                    } else {
+                        showToast(`Wrong password (${MAX_UNLOCK_ATTEMPTS - unlockAttempts} attempts left)`);
+                    }
+                    return;
+                }
+                // Not JSON — old CryptoJS raw format, use stored directly
             }
-            // Not JSON — new format, use stored directly
-        }
 
-        const decrypted = CryptoJS.AES.decrypt(encrypted, password).toString(CryptoJS.enc.Utf8);
-        if (!decrypted) throw new Error('decrypt failed');
-        const data = JSON.parse(decrypted);
+            const decrypted = CryptoJS.AES.decrypt(encrypted, password).toString(CryptoJS.enc.Utf8);
+            if (!decrypted) throw new Error('decrypt failed');
+            data = JSON.parse(decrypted);
+
+            if (isLegacy) {
+                localStorage.removeItem('encryptedDataStorage');
+            }
+        }
 
         // Handle both data shapes
         if (data.privateKey) {
@@ -1480,10 +1549,10 @@ async function unlockVault() {
         _masterPassword = password;
         unlockAttempts = 0;
 
-        // Migrate legacy format to new single-string format
-        if (isLegacy) {
-            autoSaveVault();
-            localStorage.removeItem('encryptedDataStorage');
+        // Migrate legacy CryptoJS format to Web Crypto
+        if (needsMigration) {
+            await autoSaveVault();
+            debugLog('unlockVault: migrated vault to Web Crypto');
         }
 
         resetInactivityTimer();
@@ -1547,20 +1616,11 @@ function triggerImport() {
             }
             const siteCount = Object.values(data.users).reduce((n, u) => n + Object.keys(u).length, 0);
             if (!await showConfirm(`Import ${siteCount} site(s)? This will merge with your current vault.`)) return;
-            // Merge users — higher nonce wins (more recent password rotation)
-            Object.entries(data.users).forEach(([user, sites]) => {
-                if (!vault.users[user]) vault.users[user] = {};
-                Object.entries(sites).forEach(([site, nonce]) => {
-                    // Only overwrite if imported nonce is higher (newer version)
-                    if (vault.users[user][site] === undefined || nonce > vault.users[user][site]) {
-                        vault.users[user][site] = nonce;
-                    }
-                });
-            });
+            mergeUsers(data.users);
             if (data.settings) vault.settings = { ...vault.settings, ...data.settings };
             renderSiteList();
-            saveLocalNonceBackup();
-            autoSaveVault();
+            await saveLocalNonceBackup();
+            await autoSaveVault();
             backupToNostrDebounced();
             showToast(`Imported ${siteCount} site(s)!`);
         } catch (err) {
@@ -1580,12 +1640,12 @@ function triggerImport() {
  * Persist advanced settings (hash length, debug mode) and return to the settings screen.
  * Clamps hashLength to the range [8, 64].
  */
-function saveAdvancedSettings() {
+async function saveAdvancedSettings() {
     const len = parseInt(document.getElementById('hashLengthSetting').value) || 16;
     vault.settings.hashLength = Math.max(8, Math.min(64, len));
     vault.settings.debugMode = debugMode;
-    saveLocalNonceBackup();
-    autoSaveVault();
+    await saveLocalNonceBackup();
+    await autoSaveVault();
     backupToNostrDebounced();
     showToast('Settings saved');
     showScreen('settingsScreen');
@@ -1707,6 +1767,7 @@ async function connectRelay(url, timeoutMs = 5000) {
     await new Promise((resolve, reject) => {
         const t = setTimeout(() => {
             debugLog(`connectRelay: timeout — ${url}`);
+            relay.close();
             reject('timeout');
         }, timeoutMs);
         relay.on('connect', () => {
@@ -1717,6 +1778,7 @@ async function connectRelay(url, timeoutMs = 5000) {
         relay.on('error', (err) => {
             clearTimeout(t);
             debugLog(`connectRelay: error — ${url}`, err);
+            relay.close();
             reject(err);
         });
         relay.connect();
@@ -1841,6 +1903,102 @@ function parseDoubleEncryptedEnvelope(decryptedContent) {
 }
 
 // ============================================
+// Local Storage Encryption (Web Crypto API)
+// ============================================
+
+const LOCAL_ENCRYPT_VERSION = 3;
+const LOCAL_ENCRYPT_ITERATIONS = 600000;
+
+let _cachedLocalKey = null;
+let _cachedLocalSalt = null;
+let _cachedLocalPassphrase = null;
+
+/**
+ * Derive an AES-256-GCM key from a passphrase using PBKDF2.
+ */
+async function deriveLocalKey(passphrase, salt) {
+    const enc = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey(
+        'raw', enc.encode(passphrase), 'PBKDF2', false, ['deriveKey']
+    );
+    return crypto.subtle.deriveKey(
+        { name: 'PBKDF2', salt, iterations: LOCAL_ENCRYPT_ITERATIONS, hash: 'SHA-256' },
+        keyMaterial,
+        { name: 'AES-GCM', length: 256 },
+        false,
+        ['encrypt', 'decrypt']
+    );
+}
+
+/**
+ * Encrypt plaintext with AES-256-GCM using PBKDF2-derived key.
+ * Returns a versioned JSON envelope string for localStorage.
+ */
+async function encryptLocal(plaintext, passphrase) {
+    let key, salt;
+    if (_cachedLocalKey && _cachedLocalSalt && _cachedLocalPassphrase === passphrase) {
+        key = _cachedLocalKey;
+        salt = _cachedLocalSalt;
+    } else {
+        salt = crypto.getRandomValues(new Uint8Array(16));
+        key = await deriveLocalKey(passphrase, salt);
+        _cachedLocalKey = key;
+        _cachedLocalSalt = salt;
+        _cachedLocalPassphrase = passphrase;
+    }
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const enc = new TextEncoder();
+    const ciphertextBuf = await crypto.subtle.encrypt(
+        { name: 'AES-GCM', iv }, key, enc.encode(plaintext)
+    );
+    return JSON.stringify({
+        v: LOCAL_ENCRYPT_VERSION,
+        salt: btoa(String.fromCharCode(...salt)),
+        iv: btoa(String.fromCharCode(...iv)),
+        ciphertext: btoa(String.fromCharCode(...new Uint8Array(ciphertextBuf)))
+    });
+}
+
+/**
+ * Decrypt a v3 (Web Crypto) envelope from localStorage.
+ */
+async function decryptLocal(envelopeStr, passphrase) {
+    const envelope = JSON.parse(envelopeStr);
+    if (envelope.v !== LOCAL_ENCRYPT_VERSION) throw new Error('unknown encryption version');
+    const salt = Uint8Array.from(atob(envelope.salt), c => c.charCodeAt(0));
+    const iv = Uint8Array.from(atob(envelope.iv), c => c.charCodeAt(0));
+    const ciphertext = Uint8Array.from(atob(envelope.ciphertext), c => c.charCodeAt(0));
+
+    let key;
+    if (_cachedLocalKey && _cachedLocalSalt && _cachedLocalPassphrase === passphrase &&
+        salt.length === _cachedLocalSalt.length && salt.every((b, i) => b === _cachedLocalSalt[i])) {
+        key = _cachedLocalKey;
+    } else {
+        key = await deriveLocalKey(passphrase, salt);
+        _cachedLocalKey = key;
+        _cachedLocalSalt = salt;
+        _cachedLocalPassphrase = passphrase;
+    }
+
+    const plaintextBuf = await crypto.subtle.decrypt(
+        { name: 'AES-GCM', iv }, key, ciphertext
+    );
+    return new TextDecoder().decode(plaintextBuf);
+}
+
+/**
+ * Detect whether a stored string is a v3 (Web Crypto) envelope or legacy CryptoJS.
+ */
+function isWebCryptoEnvelope(stored) {
+    try {
+        const parsed = JSON.parse(stored);
+        return parsed && parsed.v === LOCAL_ENCRYPT_VERSION && parsed.salt && parsed.iv && parsed.ciphertext;
+    } catch {
+        return false;
+    }
+}
+
+// ============================================
 // Backup Password UI Helpers
 // ============================================
 
@@ -1893,6 +2051,10 @@ function showBackupPasswordModal(mode) {
         function onConfirm() {
             const p1 = pass1.value;
             if (!p1) { showToast('Password required'); return; }
+            if ((mode === 'set' || mode === 'change') && p1.length < MIN_PASSWORD_LENGTH) {
+                showToast(`Password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+                return;
+            }
             if ((mode === 'set' || mode === 'change') && p1 !== pass2.value) {
                 showToast('Passwords don\'t match');
                 return;
@@ -2144,10 +2306,10 @@ async function restoreFromNostr() {
             const decryptPk = usedLegacy ? legacyPk : pk;
             const decrypted = await decryptBackupEvent(latest, decryptSk, decryptPk, true);
             const data = JSON.parse(decrypted);
-            vault.users = { ...vault.users, ...data.users };
+            mergeUsers(data.users);
             if (data.settings) vault.settings = { ...vault.settings, ...data.settings };
-            saveLocalNonceBackup();
-            autoSaveVault();
+            await saveLocalNonceBackup();
+            await autoSaveVault();
             if (usedLegacy) {
                 showToast('Found backup from previous version — upgrading key derivation');
                 backupToNostrDebounced();
@@ -2304,10 +2466,10 @@ async function restoreFromId(eventId, eventKind) {
                 }
             }
             const data = JSON.parse(decrypted);
-            vault.users = data.users || vault.users;
+            mergeUsers(data.users);
             if (data.settings) vault.settings = { ...vault.settings, ...data.settings };
-            saveLocalNonceBackup();
-            autoSaveVault();
+            await saveLocalNonceBackup();
+            await autoSaveVault();
             showToast('Restored!');
             showScreen('mainScreen');
         } else {
@@ -2635,7 +2797,6 @@ document.addEventListener('DOMContentLoaded', () => {
         btnRestoreFromNostr: () => restoreFromNostr(),
         btnOpenNostrHistory: () => openNostrHistory(),
         btnSetMasterPassword: () => setMasterPassword(),
-        btnSkipMasterPassword: () => skipMasterPassword(),
         btnDeleteAllData: () => deleteAllData(),
         btnDeleteAllDataUnlock: () => deleteAllData(),
         btnDownloadData: () => downloadData(),
@@ -2714,12 +2875,6 @@ document.addEventListener('DOMContentLoaded', () => {
         navigator.serviceWorker.register('sw.js').catch(() => {});
     }
 
-    // Auto-show unlock screen if encrypted vault exists
-    const storedVault = localStorage.getItem('vaultEncrypted');
-    const legacyVault = localStorage.getItem('encryptedDataStorage');
-    if (storedVault || legacyVault) {
-        navigationStack = ['unlockScreen'];
-        history.replaceState({ screen: 'unlockScreen' }, '');
-        showScreen('unlockScreen');
-    }
+    // Set welcome screen state based on whether a saved vault exists
+    updateWelcomeState();
 });
