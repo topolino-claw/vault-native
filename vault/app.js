@@ -105,7 +105,8 @@ function showScreen(screenId) {
 
     // Screen-specific setup
     if (screenId === 'welcomeScreen') {
-        updateWelcomeState();
+        const hasVault = localStorage.getItem('vaultEncrypted') || localStorage.getItem('encryptedDataStorage');
+        if (hasVault) { showScreen('unlockScreen'); return; }
     } else if (screenId === 'mainScreen') {
         renderSiteList();
     } else if (screenId === 'newWalletScreen') {
@@ -131,22 +132,6 @@ function goBack() {
     showScreen(prev);
 }
 
-/**
- * Toggle the welcome screen between "create/restore" and "unlock" states
- * based on whether an encrypted vault exists in localStorage.
- */
-function updateWelcomeState() {
-    const hasVault = localStorage.getItem('vaultEncrypted') || localStorage.getItem('encryptedDataStorage');
-    const welcomeNew = document.getElementById('welcomeNew');
-    const welcomeUnlock = document.getElementById('welcomeUnlock');
-    if (hasVault) {
-        welcomeNew.classList.add('hidden');
-        welcomeUnlock.classList.remove('hidden');
-    } else {
-        welcomeNew.classList.remove('hidden');
-        welcomeUnlock.classList.add('hidden');
-    }
-}
 
 // ============================================
 // Toast
@@ -957,12 +942,13 @@ async function lockVault(skipConfirm = false) {
             'No master password is set!\n\n' +
             'Your vault exists only in memory and will be PERMANENTLY LOST if you lock now.\n\n' +
             'Set a password to protect your vault, or lock anyway (destroys vault).',
-            { okLabel: 'Set Password', cancelLabel: 'Lock Anyway', cancelDanger: true }
+            { okLabel: 'Set Password', cancelLabel: 'Destroy Vault', cancelDanger: true }
         );
         if (choice) {
             showScreen('setMasterPasswordScreen');
             return;
         }
+        var destroyed = true;
     } else if (!skipConfirm && vault.privateKey) {
         if (!await showConfirm('Lock vault? You\'ll need your password to unlock again.')) return;
     }
@@ -996,7 +982,7 @@ async function lockVault(skipConfirm = false) {
 
     navigationStack = ['welcomeScreen'];
     showScreen('welcomeScreen');
-    showToast('Vault locked');
+    showToast(destroyed ? 'Vault destroyed' : 'Vault locked');
 }
 
 // ============================================
@@ -1425,12 +1411,20 @@ async function setMasterPassword() {
     showScreen('mainScreen');
 }
 
+function skipMasterPassword() {
+    _masterPassword = null;
+    showScreen('mainScreen');
+}
+
 /**
  * Delete all vault data from this device. Double confirmation required.
  */
 async function deleteAllData() {
-    if (!await showConfirm('Delete ALL vault data from this device? This cannot be undone.')) return;
-    if (!await showConfirm('Are you sure? Your locally saved vault will be permanently erased. Cloud backups will NOT be affected.')) return;
+    if (!await showConfirm(
+        'Delete all vault data from this device?\n\n' +
+        'Your locally saved vault will be permanently erased. Cloud backups will NOT be affected.\n\n' +
+        'You\'ll need your seed phrase to restore.'
+    )) return;
 
     localStorage.removeItem('vaultEncrypted');
     localStorage.removeItem('vaultNonceBackup');
@@ -2797,6 +2791,7 @@ document.addEventListener('DOMContentLoaded', () => {
         btnRestoreFromNostr: () => restoreFromNostr(),
         btnOpenNostrHistory: () => openNostrHistory(),
         btnSetMasterPassword: () => setMasterPassword(),
+        btnSkipMasterPassword: () => skipMasterPassword(),
         btnDeleteAllData: () => deleteAllData(),
         btnDeleteAllDataUnlock: () => deleteAllData(),
         btnDownloadData: () => downloadData(),
@@ -2875,6 +2870,7 @@ document.addEventListener('DOMContentLoaded', () => {
         navigator.serviceWorker.register('sw.js').catch(() => {});
     }
 
-    // Set welcome screen state based on whether a saved vault exists
-    updateWelcomeState();
+    // If a saved vault exists, go straight to unlock screen
+    const hasVault = localStorage.getItem('vaultEncrypted') || localStorage.getItem('encryptedDataStorage');
+    if (hasVault) showScreen('unlockScreen');
 });

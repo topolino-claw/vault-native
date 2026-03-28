@@ -334,6 +334,33 @@
             border-radius: 50%;
         }
 
+        .btn-back {
+            width: 40px;
+            height: 40px;
+            min-width: 40px;
+            padding: 0;
+            border-radius: 12px;
+            background: var(--surface-alt, rgba(255,255,255,0.08));
+            color: var(--text);
+            font-size: 22px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background 0.15s, transform 0.1s;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .btn-back:hover {
+            background: rgba(255,255,255,0.14);
+            transform: scale(1.05);
+        }
+
+        .btn-back:active {
+            transform: scale(0.95);
+        }
+
         .btn-danger {
             background: var(--danger);
             color: white;
@@ -908,34 +935,13 @@
         </div>
         <div class="spacer"></div>
 
-        <!-- State A: no local vault — create or restore -->
-        <div id="welcomeNew" class="button-stack">
-            <button class="btn btn-primary" data-screen="newWalletScreen">
+        <div class="button-stack">
+            <button class="btn" data-screen="newWalletScreen" style="background: #10b981; color: white;">
                 Create New Vault
             </button>
-            <button class="btn btn-secondary" data-screen="restoreSeedScreen">
+            <button class="btn btn-primary" data-screen="restoreSeedScreen">
                 I Have a Seed Phrase
             </button>
-        </div>
-
-        <!-- State B: encrypted vault exists — unlock with master password -->
-        <div id="welcomeUnlock" class="hidden">
-            <div class="input-group">
-                <label>Enter your master password</label>
-                <input type="password" id="unlockPassword" placeholder="Password">
-            </div>
-            <div class="spacer"></div>
-            <div class="button-stack">
-                <button class="btn btn-primary" id="btnUnlockVault">
-                    Unlock
-                </button>
-                <button class="btn btn-ghost" data-screen="restoreSeedScreen">
-                    Use seed phrase instead
-                </button>
-                <button class="btn btn-ghost" id="btnDeleteAllDataUnlock" style="color: var(--danger); font-size: 13px;">
-                    Delete all data
-                </button>
-            </div>
         </div>
 
         <div class="version-badge mt-24" style="justify-content: center;">
@@ -945,11 +951,37 @@
         </div>
     </div>
 
+    <!-- Screen: Unlock Saved -->
+    <div id="unlockScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn-back" data-action="back"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 15l-5-5 5-5"/></svg></button>
+                <h2 style="margin:0">Unlock Vault</h2>
+            </div>
+        </div>
+        <div class="input-group">
+            <label>Enter your password</label>
+            <input type="password" id="unlockPassword" placeholder="Password">
+        </div>
+        <div class="spacer"></div>
+        <div class="button-stack">
+            <button class="btn btn-primary" id="btnUnlockVault">
+                Unlock
+            </button>
+            <button class="btn btn-ghost" data-screen="restoreSeedScreen">
+                Use seed phrase instead
+            </button>
+            <button class="btn btn-ghost" id="btnDeleteAllDataUnlock" style="color: var(--danger); font-size: 13px;">
+                Delete all data
+            </button>
+        </div>
+    </div>
+
     <!-- Screen: Create New Wallet -->
     <div id="newWalletScreen" class="screen hidden">
         <div class="header">
             <div class="header-left">
-                <button class="btn btn-ghost btn-icon" data-action="back">←</button>
+                <button class="btn-back" data-action="back"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 15l-5-5 5-5"/></svg></button>
                 <h2 style="margin:0">Your Seed Phrase</h2>
             </div>
         </div>
@@ -972,7 +1004,7 @@
     <div id="verifySeedScreen" class="screen hidden">
         <div class="header">
             <div class="header-left">
-                <button class="btn btn-ghost btn-icon" data-action="back">←</button>
+                <button class="btn-back" data-action="back"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 15l-5-5 5-5"/></svg></button>
                 <h2 style="margin:0">Verify Backup</h2>
             </div>
         </div>
@@ -999,7 +1031,7 @@
     <div id="restoreSeedScreen" class="screen hidden">
         <div class="header">
             <div class="header-left">
-                <button class="btn btn-ghost btn-icon" data-action="back">←</button>
+                <button class="btn-back" data-action="back"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 15l-5-5 5-5"/></svg></button>
                 <h2 style="margin:0">Restore Vault</h2>
             </div>
         </div>
@@ -1048,7 +1080,7 @@
             <button class="btn btn-primary" id="btnSetMasterPassword">
                 Set Password
             </button>
-            <button class="btn btn-ghost" id="btnSkipMasterPassword">
+            <button class="btn" id="btnSkipMasterPassword" style="background: var(--danger); color: white;">
                 Skip for now
             </button>
             <p class="text-muted text-sm text-center" style="margin-top: 4px;">
@@ -1082,7 +1114,7 @@
     <div id="generateScreen" class="screen hidden">
         <div class="header">
             <div class="header-left">
-                <button class="btn btn-ghost btn-icon" data-screen="mainScreen">←</button>
+                <button class="btn-back" data-screen="mainScreen"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 15l-5-5 5-5"/></svg></button>
                 <h2 style="margin:0" id="generateTitle">Generate Password</h2>
             </div>
         </div>
@@ -1118,7 +1150,7 @@
     <div id="settingsScreen" class="screen hidden">
         <div class="header">
             <div class="header-left">
-                <button class="btn btn-ghost btn-icon" data-screen="mainScreen">←</button>
+                <button class="btn-back" data-screen="mainScreen"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 15l-5-5 5-5"/></svg></button>
                 <h2 style="margin:0">Settings</h2>
             </div>
         </div>
@@ -1127,27 +1159,27 @@
                 <div class="settings-label">☁️ Cloud Backup <span id="backupWarningBadge" class="hidden" title="Last backup failed — no relays confirmed" style="color:#e74c3c;font-size:0.85em;">⚠️</span></div>
                 <div class="settings-desc">Sync via Nostr relays</div>
             </div>
-            <span>→</span>
+            <span class="btn-back" style="width:32px;height:32px;min-width:32px;"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 5l5 5-5 5"/></svg></span>
         </div>
         <div class="settings-item" data-screen="exportScreen">
             <div>
                 <div class="settings-label">📦 Export / Import</div>
                 <div class="settings-desc">Download or restore your site list</div>
             </div>
-            <span>→</span>
+            <span class="btn-back" style="width:32px;height:32px;min-width:32px;"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 5l5 5-5 5"/></svg></span>
         </div>
         <div class="settings-item" data-screen="advancedScreen">
             <div>
                 <div class="settings-label">🔧 Advanced</div>
                 <div class="settings-desc">Hash length, seed phrase</div>
             </div>
-            <span>→</span>
+            <span class="btn-back" style="width:32px;height:32px;min-width:32px;"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 5l5 5-5 5"/></svg></span>
         </div>
         <div class="spacer"></div>
         <button class="btn btn-danger" id="btnLockVault">
             🔒 Lock Vault
         </button>
-        <button class="btn btn-ghost mt-16" id="btnDeleteAllData" style="color: var(--danger);">
+        <button class="btn mt-16" id="btnDeleteAllData" style="background: var(--danger); color: white;">
             🗑️ Delete All Data
         </button>
     </div>
@@ -1156,7 +1188,7 @@
     <div id="backupScreen" class="screen hidden">
         <div class="header">
             <div class="header-left">
-                <button class="btn btn-ghost btn-icon" data-screen="settingsScreen">←</button>
+                <button class="btn-back" data-screen="settingsScreen"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 15l-5-5 5-5"/></svg></button>
                 <h2 style="margin:0">Cloud Backup</h2>
             </div>
         </div>
@@ -1181,7 +1213,7 @@
     <div id="exportScreen" class="screen hidden">
         <div class="header">
             <div class="header-left">
-                <button class="btn btn-ghost btn-icon" data-screen="settingsScreen">←</button>
+                <button class="btn-back" data-screen="settingsScreen"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 15l-5-5 5-5"/></svg></button>
                 <h2 style="margin:0">Export / Import</h2>
             </div>
         </div>
@@ -1202,7 +1234,7 @@
     <div id="advancedScreen" class="screen hidden">
         <div class="header">
             <div class="header-left">
-                <button class="btn btn-ghost btn-icon" data-screen="settingsScreen">←</button>
+                <button class="btn-back" data-screen="settingsScreen"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 15l-5-5 5-5"/></svg></button>
                 <h2 style="margin:0">Advanced</h2>
             </div>
         </div>
@@ -1229,7 +1261,7 @@
                 <div class="settings-label">🔑 View Seed Phrase</div>
                 <div class="settings-desc">Show your 12-word backup</div>
             </div>
-            <span>→</span>
+            <span class="btn-back" style="width:32px;height:32px;min-width:32px;"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 5l5 5-5 5"/></svg></span>
         </div>
     </div>
 
@@ -1237,7 +1269,7 @@
     <div id="viewSeedScreen" class="screen hidden">
         <div class="header">
             <div class="header-left">
-                <button class="btn btn-ghost btn-icon" data-screen="advancedScreen">←</button>
+                <button class="btn-back" data-screen="advancedScreen"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.5 15l-5-5 5-5"/></svg></button>
                 <h2 style="margin:0">Seed Phrase</h2>
             </div>
         </div>
