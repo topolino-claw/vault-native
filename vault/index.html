@@ -902,12 +902,14 @@
     <div id="welcomeScreen" class="screen">
         <div class="spacer"></div>
         <div class="text-center">
-            <h1>🔐</h1>
+            <div style="font-size: 64px; line-height: 1;">🔐</div>
             <h1>Vault</h1>
-            <p class="subtitle">Deterministic passwords.<br>No storage. No sync. Just math.</p>
+            <p class="subtitle">Deterministic passwords.<br>Serverless. Encrypted. Yours.</p>
         </div>
         <div class="spacer"></div>
-        <div class="button-stack">
+
+        <!-- State A: no local vault — create or restore -->
+        <div id="welcomeNew" class="button-stack">
             <button class="btn btn-primary" data-screen="newWalletScreen">
                 Create New Vault
             </button>
@@ -915,6 +917,27 @@
                 I Have a Seed Phrase
             </button>
         </div>
+
+        <!-- State B: encrypted vault exists — unlock with master password -->
+        <div id="welcomeUnlock" class="hidden">
+            <div class="input-group">
+                <label>Enter your master password</label>
+                <input type="password" id="unlockPassword" placeholder="Password">
+            </div>
+            <div class="spacer"></div>
+            <div class="button-stack">
+                <button class="btn btn-primary" id="btnUnlockVault">
+                    Unlock
+                </button>
+                <button class="btn btn-ghost" data-screen="restoreSeedScreen">
+                    Use seed phrase instead
+                </button>
+                <button class="btn btn-ghost" id="btnDeleteAllDataUnlock" style="color: var(--danger); font-size: 13px;">
+                    Delete all data
+                </button>
+            </div>
+        </div>
+
         <div class="version-badge mt-24" style="justify-content: center;">
             <span>v3.3</span>
             <span>•</span>
@@ -1029,36 +1052,11 @@
                 Skip for now
             </button>
             <p class="text-muted text-sm text-center" style="margin-top: 4px;">
-                If you skip, you'll need your seed phrase to access the vault next time.
+                Anyone with access to this device will be able to open your vault. You'll need your seed phrase to recover it after closing.
             </p>
         </div>
     </div>
 
-    <!-- Screen: Unlock Saved -->
-    <div id="unlockScreen" class="screen hidden">
-        <div class="header">
-            <div class="header-left">
-                <button class="btn btn-ghost btn-icon" data-action="back">←</button>
-                <h2 style="margin:0">Unlock Vault</h2>
-            </div>
-        </div>
-        <div class="input-group">
-            <label>Enter your unlock password</label>
-            <input type="password" id="unlockPassword" placeholder="Password">
-        </div>
-        <div class="spacer"></div>
-        <div class="button-stack">
-            <button class="btn btn-primary" id="btnUnlockVault">
-                Unlock
-            </button>
-            <button class="btn btn-ghost" data-screen="restoreSeedScreen">
-                Use seed phrase instead
-            </button>
-            <button class="btn btn-ghost" id="btnDeleteAllDataUnlock" style="color: var(--danger); font-size: 13px;">
-                Delete all data
-            </button>
-        </div>
-    </div>
 
     <!-- Screen: Main (Site List) -->
     <div id="mainScreen" class="screen hidden">
