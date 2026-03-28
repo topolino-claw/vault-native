@@ -1,0 +1,7 @@
+{
+  "name": "vault-native",
+  "private": true,
+  "scripts": {
+    "test": "node tests/deep-merge.test.js"
+  }
+}
