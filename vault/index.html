@@ -1067,7 +1067,7 @@
             </div>
         </div>
         <p class="text-muted text-sm mb-8">
-            Write these 12 words down and store them safely. This is the only way to recover your vault.
+            These 12 words are your master key. Write them down on paper and store them somewhere safe — never digitally. If you lose access to your device, these words are the <strong>only way</strong> to recover your vault and all your passwords.
         </p>
         <div id="seedGrid" class="seed-grid"></div>
         <div class="spacer"></div>
@@ -1090,17 +1090,23 @@
             </div>
         </div>
         <p class="text-muted text-sm mb-8">
-            Enter the requested words to confirm you've saved your seed phrase.
+            Enter the requested words to confirm you've safely backed up your seed phrase.
         </p>
         <div id="verifyInputs"></div>
         <div class="passphrase-field" style="margin-top: 16px;">
-            <input type="password" id="newVaultPassphrase"
-                   placeholder="BIP39 Passphrase (optional — leave empty if unsure)"
-                   autocomplete="off" autocorrect="off" spellcheck="false"
-                   style="width:100%; padding: 12px 14px; font-size: 15px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text);" />
-            <small style="color: var(--text-muted); display: block; margin-top: 4px; font-size: 12px;">
-                ℹ️ BIP39 Passphrase (25th word) — advanced second factor. Required to restore vault.
-            </small>
+            <details style="margin-bottom: 4px;">
+                <summary style="cursor: pointer; color: var(--text-muted); font-size: 13px; user-select: none;">
+                    Advanced: Extra passphrase (for experienced users)
+                </summary>
+                <p style="color: var(--text-muted); font-size: 12px; margin: 8px 0 8px 0; line-height: 1.5;">
+                    An extra passphrase acts as a hidden additional word on top of your 12 words. It creates a completely different vault — even with the same seed phrase.<br>
+                    <strong style="color: var(--danger);">Warning:</strong> If you set a passphrase and forget it, your vault is <strong>permanently unrecoverable</strong>. No one can help you. Leave this empty unless you fully understand the implications.
+                </p>
+                <input type="password" id="newVaultPassphrase"
+                       placeholder="Extra passphrase (leave empty if unsure)"
+                       autocomplete="off" autocorrect="off" spellcheck="false"
+                       style="width:100%; padding: 12px 14px; font-size: 15px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text);" />
+            </details>
         </div>
         <div class="spacer"></div>
         <button class="btn btn-primary" id="btnVerifySeedBackup">
@@ -1125,12 +1131,17 @@
             <span id="wordCount">0</span>/12 words
         </div>
         <div class="passphrase-field" style="margin-top: 8px;">
-            <input type="password" id="bip39Passphrase" class="input-field"
-                   placeholder="BIP39 Passphrase (optional)"
-                   autocomplete="off" autocorrect="off" spellcheck="false" />
-            <small style="color: var(--text-muted); display: block; margin-top: 4px;">
-                Advanced: 25th word. Leave empty if unsure.
-            </small>
+            <details style="margin-bottom: 4px;">
+                <summary style="cursor: pointer; color: var(--text-muted); font-size: 13px; user-select: none;">
+                    Advanced: Extra passphrase (for experienced users)
+                </summary>
+                <p style="color: var(--text-muted); font-size: 12px; margin: 8px 0 8px 0; line-height: 1.5;">
+                    If your vault was created with an extra passphrase, you must enter the exact same one here. Without it, a different (empty) vault will be restored.
+                </p>
+                <input type="password" id="bip39Passphrase" class="input-field"
+                       placeholder="Extra passphrase (leave empty if not used)"
+                       autocomplete="off" autocorrect="off" spellcheck="false" />
+            </details>
         </div>
         <div class="spacer"></div>
         <button class="btn btn-primary" id="btnRestoreFromSeed">
@@ -1361,7 +1372,7 @@
             </div>
         </div>
         <p class="text-muted text-sm mb-8">
-            Keep this safe. Anyone with these words can access your passwords.
+            These 12 words are your master key. Anyone who has them can access all your passwords. Never share them or store them digitally.
         </p>
         <div id="viewSeedGrid" class="seed-grid"></div>
         <button class="btn btn-secondary mt-24" id="btnCopySeedPhrase">

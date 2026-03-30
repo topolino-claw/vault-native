@@ -47,8 +47,7 @@ const MIN_PASSWORD_LENGTH = 8;
 // where secrets are held in mlock'd, zeroize-on-drop memory.
 // The JS side only sees public keys, generated passwords, and encrypted blobs.
 
-const isTauri = !!(window.__TAURI__ && window.__TAURI__.core);
-const invoke = isTauri ? window.__TAURI__.core.invoke : null;
+const invoke = (window.__TAURI__ && window.__TAURI__.core) ? window.__TAURI__.core.invoke : null;
 
 /**
  * Deep-merge remote users into vault.users — higher nonce wins.
@@ -677,7 +676,7 @@ async function confirmSeedBackup() {
     const seedPhrase = (invoke && !vault.seedPhrase) ? await invoke('cmd_get_seed_phrase') : vault.seedPhrase;
     const seedWords = seedPhrase.split(' ');
     const indices = [];
-    while (indices.length < 3) {
+    while (indices.length < 4) {
         const r = Math.floor(Math.random() * seedWords.length);
         if (!indices.includes(r)) indices.push(r);
     }
@@ -709,7 +708,7 @@ async function confirmSeedBackup() {
 
 /**
  * Validate the user's seed verification inputs.
- * If all 3 words are correct, initialize the vault and proceed to the main screen.
+ * If all 4 words are correct, initialize the vault and proceed to the main screen.
  * On failure, highlights the incorrect fields and shows a toast.
  *
  * @returns {Promise<void>}
@@ -732,6 +731,16 @@ async function verifySeedBackup() {
 
     if (valid) {
         const passphrase = document.getElementById('newVaultPassphrase')?.value || '';
+        if (passphrase) {
+            const confirmed = confirm(
+                'You have set an extra passphrase.\n\n' +
+                'This passphrase is now permanently tied to your vault. ' +
+                'You will need BOTH your 12 words AND this exact passphrase to restore your vault.\n\n' +
+                'If you forget the passphrase, your vault is unrecoverable — no one can help you.\n\n' +
+                'Are you sure you want to continue with this passphrase?'
+            );
+            if (!confirmed) return;
+        }
         await initializeVault(seedPhrase, passphrase);
         await checkForRemoteBackups();
         showScreen('setMasterPasswordScreen');
@@ -1021,8 +1030,10 @@ async function lockVault(skipConfirm = false) {
     if (clipboardClearTimer) clearTimeout(clipboardClearTimer);
     clipboardClearTimer = null;
     try { navigator.clipboard.writeText('').catch(() => {}); } catch (_) {}
-    // Wipe all sensitive data from memory
-    if (invoke) invoke('cmd_lock_vault').catch(() => {}); // Zero secrets in Rust
+    // Zero secrets in Rust — must complete before we touch JS state
+    if (invoke) {
+        try { await invoke('cmd_lock_vault'); } catch (_) {}
+    }
     _vaultInitialized = false;
     vault = { privateKey: '', seedPhrase: '', passphrase: '', users: {}, settings: { hashLength: 16 } };
     nostrKeys = { nsec: '', npub: '' };
@@ -1047,8 +1058,11 @@ async function lockVault(skipConfirm = false) {
         });
     });
 
-    navigationStack = ['welcomeScreen'];
-    showScreen('welcomeScreen');
+    // Navigate directly to the right screen (avoid welcomeScreen → unlockScreen redirect)
+    const hasVault = localStorage.getItem('vaultEncrypted') || localStorage.getItem('encryptedDataStorage');
+    const targetScreen = hasVault ? 'unlockScreen' : 'welcomeScreen';
+    navigationStack = [targetScreen];
+    showScreen(targetScreen);
     showToast(destroyed ? 'Vault destroyed' : 'Vault locked');
 }
 
@@ -1672,7 +1686,21 @@ async function unlockVault() {
         _vaultInitialized = true;
         unlockAttempts = 0;
 
-        // Migrate legacy CryptoJS format to Web Crypto
+        // Migrate legacy format: push secrets into Rust backend if running in Tauri
+        if (needsMigration && invoke) {
+            if (vault.seedPhrase) {
+                await invoke('cmd_initialize_vault', {
+                    seedPhrase: vault.seedPhrase,
+                    passphrase: vault.passphrase || ''
+                });
+                vault.privateKey = '';
+                vault.seedPhrase = '';
+                vault.passphrase = '';
+            }
+            await invoke('cmd_set_master_password', { password });
+        }
+
+        // Re-encrypt with Web Crypto (Rust-side if Tauri, JS-side otherwise)
         if (needsMigration) {
             await autoSaveVault();
             debugLog('unlockVault: migrated vault to Web Crypto');
@@ -2261,9 +2289,21 @@ async function backupToNostr(silent = false) {
         const vaultData = JSON.stringify({ users: vault.users, settings: vault.settings });
 
         if (invoke) {
-            // Tauri mode: encrypt and sign entirely in Rust — sk never touches JS
+            // Tauri mode: encrypt with JS NIP-44 (for cross-implementation compat), sign in Rust
             const pk = await invoke('cmd_get_nostr_pubkey');
-            const encrypted = await invoke('cmd_nip44_self_encrypt', { plaintext: vaultData });
+            let encrypted;
+            try {
+                encrypted = await invoke('cmd_nip44_self_encrypt', { plaintext: vaultData });
+            } catch (rustErr) {
+                console.warn('backupToNostr: Rust NIP-44 encrypt failed, falling back to JS:', rustErr);
+                let jsSk = await invoke('cmd_get_nostr_hex_sk');
+                try {
+                    const sharedSecret = nip44.getSharedSecret(jsSk, pk);
+                    encrypted = nip44.encrypt(sharedSecret, vaultData);
+                } finally {
+                    if (jsSk) { jsSk = '0'.repeat(jsSk.length); jsSk = null; }
+                }
+            }
             const unsignedEvent = {
                 kind: 30078,
                 pubkey: pk,
@@ -2375,13 +2415,34 @@ async function decryptBackupEvent(event, sk, pk, interactive = true, useLegacy =
     let layer2Decrypted;
 
     if (invoke) {
-        // Tauri mode: decrypt in Rust — sk never touches JS
-        if (event.kind === 30078) {
-            const cmd = useLegacy ? 'cmd_nip44_legacy_decrypt' : 'cmd_nip44_self_decrypt';
-            layer2Decrypted = await invoke(cmd, { ciphertext: event.content });
-        } else {
-            const cmd = useLegacy ? 'cmd_nip04_legacy_decrypt' : 'cmd_nip04_decrypt';
-            layer2Decrypted = await invoke(cmd, { ciphertext: event.content, pubkey: event.pubkey });
+        // Tauri mode: try Rust first, fall back to JS if Rust NIP-44/04 is incompatible
+        try {
+            if (event.kind === 30078) {
+                const cmd = useLegacy ? 'cmd_nip44_legacy_decrypt' : 'cmd_nip44_self_decrypt';
+                layer2Decrypted = await invoke(cmd, { ciphertext: event.content });
+            } else {
+                const cmd = useLegacy ? 'cmd_nip04_legacy_decrypt' : 'cmd_nip04_decrypt';
+                layer2Decrypted = await invoke(cmd, { ciphertext: event.content, pubkey: event.pubkey });
+            }
+        } catch (rustErr) {
+            // Rust decrypt failed — fall back to JS with key retrieved from Rust
+            console.warn('decryptBackupEvent: Rust decrypt failed, falling back to JS:', rustErr);
+            const skCmd = useLegacy ? 'cmd_get_legacy_nostr_sk' : 'cmd_get_nostr_hex_sk';
+            const pkCmd = useLegacy ? 'cmd_get_legacy_nostr_pubkey' : 'cmd_get_nostr_pubkey';
+            let jsSk = await invoke(skCmd);
+            const jsPk = await invoke(pkCmd);
+            try {
+                const { nip44, nip04 } = window.NostrTools;
+                if (event.kind === 30078) {
+                    const sharedSecret = nip44.getSharedSecret(jsSk, jsPk);
+                    layer2Decrypted = nip44.decrypt(sharedSecret, event.content);
+                } else {
+                    layer2Decrypted = await nip04.decrypt(jsSk, event.pubkey, event.content);
+                }
+            } finally {
+                // Zero the sk from JS memory immediately
+                if (jsSk) { jsSk = '0'.repeat(jsSk.length); jsSk = null; }
+            }
         }
     } else {
         const { nip44, nip04 } = window.NostrTools;
@@ -2498,8 +2559,8 @@ async function restoreFromNostr() {
         if (e.message && e.message.includes('cancelled')) {
             showToast('Restore cancelled');
         } else {
-            debugLog('restoreFromNostr: error:', e);
-            showToast('Restore error');
+            console.error('restoreFromNostr: error:', e);
+            showToast(`Restore error: ${e.message || e}`);
         }
     }
 }
@@ -2653,8 +2714,8 @@ async function restoreFromId(eventId, eventKind) {
         if (e.message && e.message.includes('cancelled')) {
             showToast('Restore cancelled');
         } else {
-            debugLog('restoreFromId: error:', e);
-            showToast('Restore error');
+            console.error('restoreFromId: error:', e);
+            showToast(`Restore error: ${e.message || e}`);
         }
     }
 }

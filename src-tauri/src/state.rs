@@ -137,14 +137,14 @@ impl AppVault {
 
     /// Lock the vault: zero and drop all secret material.
     pub fn lock(&self) {
-        // Munlock before dropping (best-effort)
-        if let Some(ref secrets) = *self.secrets.lock() {
-            mlock_struct(secrets, false);
-        }
-        if let Some(ref keys) = *self.nostr_keys.lock() {
-            mlock_struct(keys, false);
-        }
-        // Each of these drops the old value, triggering ZeroizeOnDrop
+        // Drop secrets via `= None`, which triggers ZeroizeOnDrop to properly
+        // zero each String field's heap buffer before deallocation.
+        //
+        // Note: we intentionally do NOT call memsec::munlock here because
+        // munlock calls memzero on the struct in-place first, which corrupts
+        // the String metadata (nulls pointers/lengths/capacities) before
+        // ZeroizeOnDrop can properly zero the heap buffers — causing UB/crash.
+        // The mlock'd pages stay locked (harmless, just zeros) until process exit.
         *self.secrets.lock() = None;
         *self.nostr_keys.lock() = None;
         *self.legacy_nostr_keys.lock() = None;
