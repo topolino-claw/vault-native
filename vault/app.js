@@ -31,6 +31,7 @@ let unlockAttempts = 0;
 let unlockLockoutUntil = 0;
 let clipboardClearTimer = null;
 let _masterPassword = null;
+let _vaultInitialized = false; // True when vault has been initialized/unlocked (Tauri or legacy)
 
 const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const VISIBILITY_LOCK_MS = 2 * 60 * 1000; // 2 minutes hidden = lock
@@ -38,6 +39,16 @@ const MAX_UNLOCK_ATTEMPTS = 5;
 const UNLOCK_LOCKOUT_MS = 30 * 1000; // 30 seconds
 const DEFAULT_HASH_LENGTH = 16;
 const MIN_PASSWORD_LENGTH = 8;
+
+// ============================================
+// Tauri Backend Bridge
+// ============================================
+// When running inside Tauri, crypto operations are delegated to the Rust backend
+// where secrets are held in mlock'd, zeroize-on-drop memory.
+// The JS side only sees public keys, generated passwords, and encrypted blobs.
+
+const isTauri = !!(window.__TAURI__ && window.__TAURI__.core);
+const invoke = isTauri ? window.__TAURI__.core.invoke : null;
 
 /**
  * Deep-merge remote users into vault.users — higher nonce wins.
@@ -263,6 +274,8 @@ function wordsToIndices(inputWords) {
  * @returns {Promise<boolean>} True if valid, false otherwise.
  */
 async function verifyBip39SeedPhrase(seedPhrase) {
+    if (invoke) return invoke('cmd_verify_seed_phrase', { phrase: seedPhrase });
+
     const normalized = seedPhrase.replace(/\s+/g, ' ').trim().toLowerCase();
     const seedWords = normalized.split(' ');
 
@@ -285,6 +298,7 @@ async function verifyBip39SeedPhrase(seedPhrase) {
     }
 
     const hashBuffer = await crypto.subtle.digest('SHA-256', entropyBytes);
+    entropyBytes.fill(0);
     const hashBinary = Array.from(new Uint8Array(hashBuffer))
         .map(b => b.toString(2).padStart(8, '0')).join('');
 
@@ -298,6 +312,8 @@ async function verifyBip39SeedPhrase(seedPhrase) {
  * @returns {Promise<string>} Space-separated 12-word mnemonic phrase.
  */
 async function generateMnemonic() {
+    if (invoke) return invoke('cmd_generate_mnemonic');
+
     const entropy = new Uint8Array(16); // 128 bits
     crypto.getRandomValues(entropy);
 
@@ -314,6 +330,7 @@ async function generateMnemonic() {
         mnemonic.push(words[parseInt(fullBinary.slice(i, i + 11), 2)]);
     }
 
+    entropy.fill(0);
     return mnemonic.join(' ');
 }
 
@@ -349,8 +366,10 @@ async function deriveNostrKeys(privateKey) {
     const utf8 = new TextEncoder().encode(privateKey);
     const hashBuffer = await crypto.subtle.digest('SHA-256', utf8);
     // Nostr secret key = SHA-256 of the vault private key
-    const nostrHex = Array.from(new Uint8Array(hashBuffer))
+    const hashBytes = new Uint8Array(hashBuffer);
+    const nostrHex = Array.from(hashBytes)
         .map(b => b.toString(16).padStart(2, '0')).join('');
+    hashBytes.fill(0);
 
     const nsec = nip19.nsecEncode(nostrHex);
     const npub = getPublicKey(nostrHex);
@@ -464,7 +483,9 @@ async function _bip32Master(seed) {
         { name: 'HMAC', hash: 'SHA-512' }, false, ['sign']
     );
     const r = new Uint8Array(await crypto.subtle.sign('HMAC', key, seed));
-    return { privateKey: r.slice(0, 32), chainCode: r.slice(32) };
+    const result = { privateKey: r.slice(0, 32), chainCode: r.slice(32) };
+    r.fill(0);
+    return result;
 }
 
 /**
@@ -480,7 +501,10 @@ async function _bip32HardChild(pk, cc, index) {
         'raw', cc, { name: 'HMAC', hash: 'SHA-512' }, false, ['sign']
     );
     const r = new Uint8Array(await crypto.subtle.sign('HMAC', key, data));
-    return { privateKey: _secp256k1ModAdd(r.slice(0, 32), pk), chainCode: r.slice(32) };
+    data.fill(0);
+    const result = { privateKey: _secp256k1ModAdd(r.slice(0, 32), pk), chainCode: r.slice(32) };
+    r.fill(0);
+    return result;
 }
 
 /**
@@ -497,7 +521,10 @@ async function _bip32NormalChild(pk, cc, index) {
         'raw', cc, { name: 'HMAC', hash: 'SHA-512' }, false, ['sign']
     );
     const r = new Uint8Array(await crypto.subtle.sign('HMAC', key, data));
-    return { privateKey: _secp256k1ModAdd(r.slice(0, 32), pk), chainCode: r.slice(32) };
+    data.fill(0);
+    const result = { privateKey: _secp256k1ModAdd(r.slice(0, 32), pk), chainCode: r.slice(32) };
+    r.fill(0);
+    return result;
 }
 
 /**
@@ -511,14 +538,24 @@ async function _bip32NormalChild(pk, cc, index) {
 async function deriveNostrKeyNIP06(mnemonic, passphrase = '') {
     const seed = await _mnemonicToSeed(mnemonic, passphrase);
     let { privateKey: pk, chainCode: cc } = await _bip32Master(seed);
+    seed.fill(0);
     // Hardened: 44', 1237', 0'
     for (const i of [44, 1237, 0]) {
+        const prev = pk;
         ({ privateKey: pk, chainCode: cc } = await _bip32HardChild(pk, cc, i));
+        prev.fill(0);
     }
     // Non-hardened: 0, 0
+    let prev = pk;
     ({ privateKey: pk, chainCode: cc } = await _bip32NormalChild(pk, cc, 0));
+    prev.fill(0);
+    prev = pk;
     ({ privateKey: pk } = await _bip32NormalChild(pk, cc, 0));
-    return Array.from(pk).map(b => b.toString(16).padStart(2, '0')).join('');
+    prev.fill(0);
+    cc.fill(0);
+    const hex = Array.from(pk).map(b => b.toString(16).padStart(2, '0')).join('');
+    pk.fill(0);
+    return hex;
 }
 
 /**
@@ -541,10 +578,11 @@ async function deriveNostrKeysNIP06(mnemonic, passphrase = '') {
  * Compute the SHA-256 hash of a string and return it as a lowercase hex string.
  *
  * @param {string} text - Input string.
- * @returns {string} 64-character lowercase hex SHA-256 digest.
+ * @returns {Promise<string>} 64-character lowercase hex SHA-256 digest.
  */
-function hash(text) {
-    return CryptoJS.SHA256(text).toString();
+async function hash(text) {
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 /**
@@ -565,9 +603,14 @@ function hash(text) {
  * @param {number} [hashLength=16] - Number of hex characters to take from the SHA-256 output.
  * @returns {string} The generated password in the form "PASS<hex>249+".
  */
-function generatePassword(privateKey, user, site, nonce, hashLength = 16) {
+async function generatePassword(privateKey, user, site, nonce, hashLength = 16) {
+    if (invoke) {
+        return invoke('cmd_generate_password', {
+            user, site, nonce, hashLength
+        });
+    }
     const concat = `${privateKey}/${user}/${site}/${nonce}`;
-    const entropy = hash(concat).substring(0, hashLength);
+    const entropy = (await hash(concat)).substring(0, hashLength);
     return 'PASS' + entropy + '249+';
 }
 
@@ -607,7 +650,7 @@ function getPasswordStrength(hashLength) {
  */
 async function generateNewSeed(isInitial = false) {
     // Only confirm if there's already a seed loaded (re-generating)
-    if (!isInitial && vault.seedPhrase && vault.privateKey) {
+    if (!isInitial && (vault.seedPhrase || _vaultInitialized)) {
         if (!await showConfirm('Generate a new seed phrase? This will replace the current one.')) return;
     }
     const mnemonic = await generateMnemonic();
@@ -629,9 +672,10 @@ async function generateNewSeed(isInitial = false) {
  * Picks 3 random word positions and renders text inputs for the user to fill in.
  * Transitions to the 'verifySeedScreen'.
  */
-function confirmSeedBackup() {
+async function confirmSeedBackup() {
     // Setup verification
-    const seedWords = vault.seedPhrase.split(' ');
+    const seedPhrase = (invoke && !vault.seedPhrase) ? await invoke('cmd_get_seed_phrase') : vault.seedPhrase;
+    const seedWords = seedPhrase.split(' ');
     const indices = [];
     while (indices.length < 3) {
         const r = Math.floor(Math.random() * seedWords.length);
@@ -671,7 +715,8 @@ function confirmSeedBackup() {
  * @returns {Promise<void>}
  */
 async function verifySeedBackup() {
-    const seedWords = vault.seedPhrase.split(' ');
+    const seedPhrase = (invoke && !vault.seedPhrase) ? await invoke('cmd_get_seed_phrase') : vault.seedPhrase;
+    const seedWords = seedPhrase.split(' ');
     const inputs = document.querySelectorAll('.verify-word');
     let valid = true;
 
@@ -687,7 +732,7 @@ async function verifySeedBackup() {
 
     if (valid) {
         const passphrase = document.getElementById('newVaultPassphrase')?.value || '';
-        await initializeVault(vault.seedPhrase, passphrase);
+        await initializeVault(seedPhrase, passphrase);
         await checkForRemoteBackups();
         showScreen('setMasterPasswordScreen');
     } else {
@@ -741,10 +786,21 @@ async function restoreFromSeed() {
  * @returns {Promise<void>}
  */
 async function initializeVault(seedPhrase, passphrase = '') {
-    vault.seedPhrase = seedPhrase.replace(/\s+/g, ' ').trim().toLowerCase();
-    vault.privateKey = await derivePrivateKey(vault.seedPhrase);
-    nostrKeys = await deriveNostrKeysNIP06(vault.seedPhrase, passphrase);
-    vault.passphrase = passphrase;
+    if (invoke) {
+        // Delegate to Rust backend — secrets stay in mlock'd memory
+        const info = await invoke('cmd_initialize_vault', { seedPhrase, passphrase });
+        vault.seedPhrase = ''; // Don't keep in JS
+        vault.privateKey = ''; // Don't keep in JS
+        vault.passphrase = '';
+        nostrKeys = { nsec: '', npub: info.npub, hex: info.npub_hex };
+        vault.users = info.users;
+        vault.settings = info.settings;
+    } else {
+        vault.seedPhrase = seedPhrase.replace(/\s+/g, ' ').trim().toLowerCase();
+        vault.privateKey = await derivePrivateKey(vault.seedPhrase);
+        nostrKeys = await deriveNostrKeysNIP06(vault.seedPhrase, passphrase);
+        vault.passphrase = passphrase;
+    }
 
     // Attempt to load local nonce backup as a low-priority seed.
     // Nostr data (fetched later in checkForRemoteBackups) will overwrite this.
@@ -791,6 +847,7 @@ async function initializeVault(seedPhrase, passphrase = '') {
         debugLog('initializeVault: could not read local backup:', e);
     }
 
+    _vaultInitialized = true;
     resetInactivityTimer();
 }
 
@@ -834,7 +891,7 @@ async function checkForRemoteBackups() {
  *   found — true if a backup was found and applied
  */
 async function silentRestoreFromNostr() {
-    if (!vault.privateKey) return { found: false };
+    if (!_vaultInitialized && !vault.privateKey) return { found: false };
 
     const { sk, pk } = await getNostrKeyPair();
 
@@ -866,9 +923,9 @@ async function silentRestoreFromNostr() {
     }
 
     // Helper: attempt to decrypt and apply a backup event
-    async function tryApplyBackup(event, decryptSk, decryptPk) {
+    async function tryApplyBackup(event, decryptSk, decryptPk, useLegacy = false) {
         try {
-            const decrypted = await decryptBackupEvent(event, decryptSk, decryptPk, false);
+            const decrypted = await decryptBackupEvent(event, decryptSk, decryptPk, false, useLegacy);
             const data = JSON.parse(decrypted);
             mergeUsers(data.users);
             if (data.settings) {
@@ -881,7 +938,7 @@ async function silentRestoreFromNostr() {
         } catch (e) {
             if (e.message && e.message.includes('password')) {
                 try {
-                    const decrypted = await decryptBackupEvent(event, decryptSk, decryptPk, true);
+                    const decrypted = await decryptBackupEvent(event, decryptSk, decryptPk, true, useLegacy);
                     const data = JSON.parse(decrypted);
                     mergeUsers(data.users);
                     if (data.settings) {
@@ -903,7 +960,7 @@ async function silentRestoreFromNostr() {
     // 1. Try NIP-06 key (current)
     let latest = await fetchLatestFromRelays(pk);
     if (latest) {
-        const result = await tryApplyBackup(latest, sk, pk);
+        const result = await tryApplyBackup(latest, sk, pk, false);
         if (result) return result;
     }
 
@@ -914,7 +971,7 @@ async function silentRestoreFromNostr() {
             debugLog('silentRestoreFromNostr: trying legacy key fallback');
             latest = await fetchLatestFromRelays(legacy.pk);
             if (latest) {
-                const result = await tryApplyBackup(latest, legacy.sk, legacy.pk);
+                const result = await tryApplyBackup(latest, legacy.sk, legacy.pk, true);
                 if (result) {
                     showToast('Legacy backup found — upgrading to NIP-06 key');
                     // Re-publish with new NIP-06 key
@@ -935,8 +992,10 @@ async function silentRestoreFromNostr() {
  * @param {boolean} [skipConfirm=false] - If true, skip the confirmation dialog.
  */
 async function lockVault(skipConfirm = false) {
+    const isUnlocked = invoke ? await invoke('cmd_is_unlocked') : !!vault.privateKey;
+    const hasPassword = invoke ? await invoke('cmd_has_master_password') : !!_masterPassword;
     // No-password sessions: vault lives only in memory and cannot be recovered.
-    if (!_masterPassword && vault.privateKey) {
+    if (!hasPassword && isUnlocked) {
         if (skipConfirm) {
             // Auto-lock (inactivity / visibility): destroy the vault silently.
             var destroyed = true;
@@ -954,7 +1013,7 @@ async function lockVault(skipConfirm = false) {
             }
             var destroyed = true;
         }
-    } else if (!skipConfirm && vault.privateKey) {
+    } else if (!skipConfirm && isUnlocked) {
         if (!await showConfirm('Lock vault? You\'ll need your password to unlock again.')) return;
     }
     if (inactivityTimer) clearTimeout(inactivityTimer);
@@ -963,10 +1022,13 @@ async function lockVault(skipConfirm = false) {
     clipboardClearTimer = null;
     try { navigator.clipboard.writeText('').catch(() => {}); } catch (_) {}
     // Wipe all sensitive data from memory
+    if (invoke) invoke('cmd_lock_vault').catch(() => {}); // Zero secrets in Rust
+    _vaultInitialized = false;
     vault = { privateKey: '', seedPhrase: '', passphrase: '', users: {}, settings: { hashLength: 16 } };
     nostrKeys = { nsec: '', npub: '' };
     _masterPassword = null;
     _cachedLocalKey = null;
+    if (_cachedLocalSalt) _cachedLocalSalt.fill(0);
     _cachedLocalSalt = null;
     _cachedLocalPassphrase = null;
 
@@ -1010,6 +1072,21 @@ async function lockVault(skipConfirm = false) {
  *   - copyPassword() (nonce may have changed)
  */
 async function saveLocalNonceBackup() {
+    if (invoke) {
+        const isUnlocked = await invoke('cmd_is_unlocked');
+        if (!isUnlocked) return;
+        try {
+            await invoke('cmd_set_vault_users', { usersJson: JSON.stringify(vault.users) });
+            await invoke('cmd_set_vault_settings', { settingsJson: JSON.stringify(vault.settings) });
+            const encrypted = await invoke('cmd_encrypt_nonce_backup');
+            localStorage.setItem('vaultNonceBackup', encrypted);
+            debugLog('saveLocalNonceBackup: saved (Tauri)');
+        } catch (e) {
+            debugLog('saveLocalNonceBackup: failed:', e);
+        }
+        return;
+    }
+
     if (!vault.privateKey) return;
     try {
         const payload = JSON.stringify({ users: vault.users, settings: vault.settings });
@@ -1027,6 +1104,24 @@ async function saveLocalNonceBackup() {
  * Called after every vault data mutation. No-op if the user skipped password setup.
  */
 async function autoSaveVault() {
+    if (invoke) {
+        // In Tauri mode: Rust holds all secrets, encrypt from Rust
+        const hasPassword = await invoke('cmd_has_master_password');
+        const isUnlocked = await invoke('cmd_is_unlocked');
+        if (!hasPassword || !isUnlocked) return;
+        try {
+            // Sync JS-side user/settings data to Rust before encrypting
+            await invoke('cmd_set_vault_users', { usersJson: JSON.stringify(vault.users) });
+            await invoke('cmd_set_vault_settings', { settingsJson: JSON.stringify(vault.settings) });
+            const encrypted = await invoke('cmd_encrypt_vault');
+            localStorage.setItem('vaultEncrypted', encrypted);
+            debugLog('autoSaveVault: saved (Tauri)');
+        } catch (e) {
+            debugLog('autoSaveVault: failed:', e);
+        }
+        return;
+    }
+
     if (!_masterPassword || !vault.privateKey) return;
     try {
         const saveData = {
@@ -1188,19 +1283,19 @@ function updateNonceIndicator() {
  * site, user, and nonce inputs. Only updates the display if the password
  * is currently visible.
  */
-function updatePassword() {
+async function updatePassword() {
     const site = document.getElementById('genSite').value.trim();
     const user = document.getElementById('genUser').value.trim();
     const strengthEl = document.getElementById('passwordStrength');
 
-    if (!site || !user || !vault.privateKey) {
+    if (!site || !user || (!_vaultInitialized && !vault.privateKey)) {
         document.getElementById('genPassword').textContent = '••••••••••••';
         if (strengthEl) strengthEl.textContent = '';
         return;
     }
 
     const hl = vault.settings.hashLength || DEFAULT_HASH_LENGTH;
-    const pass = generatePassword(vault.privateKey, user, site, currentNonce, hl);
+    const pass = await generatePassword(vault.privateKey, user, site, currentNonce, hl);
 
     if (passwordVisible) {
         document.getElementById('genPassword').textContent = pass;
@@ -1274,7 +1369,7 @@ async function copyPassword() {
     originalNonce = currentNonce;
     updateNonceIndicator();
 
-    const pass = generatePassword(
+    const pass = await generatePassword(
         vault.privateKey, user, site, currentNonce,
         vault.settings.hashLength || DEFAULT_HASH_LENGTH
     );
@@ -1411,6 +1506,7 @@ async function setMasterPassword() {
     if (p1 !== p2) { showToast('Passwords don\'t match'); return; }
 
     _masterPassword = p1;
+    if (invoke) await invoke('cmd_set_master_password', { password: p1 });
     await autoSaveVault();
     showToast('Password set!');
     showScreen('mainScreen');
@@ -1485,6 +1581,24 @@ async function unlockVault() {
         const stored = localStorage.getItem('vaultEncrypted');
         if (!stored) { showToast('No saved vault found'); return; }
 
+        // Tauri path: decrypt in Rust, secrets stay in Rust memory
+        if (invoke && isWebCryptoEnvelope(stored)) {
+            const info = await invoke('cmd_unlock_vault', { encrypted: stored, password });
+            vault.privateKey = ''; // Don't keep in JS
+            vault.seedPhrase = '';
+            vault.passphrase = '';
+            vault.users = info.users;
+            vault.settings = info.settings;
+            nostrKeys = { nsec: '', npub: info.npub, hex: info.npub_hex };
+            _masterPassword = password; // Keep for UI checks only
+            _vaultInitialized = true;
+            unlockAttempts = 0;
+            resetInactivityTimer();
+            showToast('Vault unlocked!');
+            showScreen('mainScreen');
+            return;
+        }
+
         let data;
         let needsMigration = false;
 
@@ -1504,7 +1618,7 @@ async function unlockVault() {
                 if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) &&
                     parsed.v !== LOCAL_ENCRYPT_VERSION) {
                     // Legacy format: dictionary keyed by password hash
-                    const key = hash(password);
+                    const key = await hash(password);
                     const legacyStored = JSON.parse(localStorage.getItem('encryptedDataStorage') || '{}');
                     const merged = { ...legacyStored, ...parsed };
                     encrypted = merged[key];
@@ -1555,6 +1669,7 @@ async function unlockVault() {
         }
 
         _masterPassword = password;
+        _vaultInitialized = true;
         unlockAttempts = 0;
 
         // Migrate legacy CryptoJS format to Web Crypto
@@ -1690,8 +1805,12 @@ function encodeNevent(eventId, relays = []) {
  * Display the vault's seed phrase in the view seed screen.
  * Shows a toast if the seed phrase is not available (e.g. legacy unlock).
  */
-function showSeedPhrase() {
-    if (!vault.seedPhrase) {
+async function showSeedPhrase() {
+    let seedPhrase = vault.seedPhrase;
+    if (invoke) {
+        try { seedPhrase = await invoke('cmd_get_seed_phrase'); } catch (_) { seedPhrase = ''; }
+    }
+    if (!seedPhrase) {
         showToast('Seed phrase not available (unlocked from legacy storage)');
         return;
     }
@@ -1699,7 +1818,7 @@ function showSeedPhrase() {
     const grid = document.getElementById('viewSeedGrid');
     grid.innerHTML = '';
 
-    vault.seedPhrase.split(' ').forEach((word, i) => {
+    seedPhrase.split(' ').forEach((word, i) => {
         const div = document.createElement('div');
         div.className = 'seed-word';
         div.innerHTML = `<span>${i + 1}.</span>${word}`;
@@ -1712,8 +1831,9 @@ function showSeedPhrase() {
 /**
  * Copy the vault's seed phrase to the clipboard and show a confirmation toast.
  */
-function copySeedPhrase() {
-    navigator.clipboard.writeText(vault.seedPhrase).then(() => {
+async function copySeedPhrase() {
+    const seedPhrase = invoke ? await invoke('cmd_get_seed_phrase') : vault.seedPhrase;
+    navigator.clipboard.writeText(seedPhrase).then(() => {
         showToast('Seed phrase copied — clipboard clears in 15s');
         setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 15000);
     });
@@ -1732,6 +1852,11 @@ function copySeedPhrase() {
  *   pk: hex Nostr public key
  */
 async function getNostrKeyPair() {
+    if (invoke) {
+        // In Tauri mode, sk stays in Rust — only return pk
+        const pk = await invoke('cmd_get_nostr_pubkey');
+        return { sk: null, pk };
+    }
     // Use NIP-06 derived keys if available, otherwise fall back to legacy SHA-256
     if (nostrKeys && nostrKeys.hex) {
         const { getPublicKey } = window.NostrTools;
@@ -1740,7 +1865,9 @@ async function getNostrKeyPair() {
     const { getPublicKey } = window.NostrTools;
     const utf8 = new TextEncoder().encode(vault.privateKey);
     const hashBuffer = await crypto.subtle.digest('SHA-256', utf8);
-    const sk = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+    const hashBytes = new Uint8Array(hashBuffer);
+    const sk = Array.from(hashBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    hashBytes.fill(0);
     const pk = getPublicKey(sk);
     return { sk, pk };
 }
@@ -1750,10 +1877,17 @@ async function getNostrKeyPair() {
  * Used for fallback backup restoration from pre-NIP-06 backups.
  */
 async function getLegacyNostrKeyPair() {
+    if (invoke) {
+        // In Tauri mode, sk stays in Rust — only return pk
+        const pk = await invoke('cmd_get_legacy_nostr_pubkey');
+        return { sk: null, pk };
+    }
     const { getPublicKey } = window.NostrTools;
     const utf8 = new TextEncoder().encode(vault.privateKey);
     const hashBuffer = await crypto.subtle.digest('SHA-256', utf8);
-    const sk = Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+    const hashBytes = new Uint8Array(hashBuffer);
+    const sk = Array.from(hashBytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    hashBytes.fill(0);
     const pk = getPublicKey(sk);
     return { sk, pk };
 }
@@ -1866,11 +2000,13 @@ async function encryptWithBackupPassword(plaintext, password, npubHex) {
         enc.encode(plaintext)
     );
     // Encode IV and ciphertext (includes auth tag) as base64
-    return {
+    const result = {
         v: BACKUP_ENCRYPTED_VERSION,
         iv: btoa(String.fromCharCode(...iv)),
         ciphertext: btoa(String.fromCharCode(...new Uint8Array(ciphertextBuf)))
     };
+    iv.fill(0);
+    return result;
 }
 
 /**
@@ -1891,6 +2027,8 @@ async function decryptWithBackupPassword(envelope, password, npubHex) {
         key,
         ciphertext
     );
+    iv.fill(0);
+    ciphertext.fill(0);
     return new TextDecoder().decode(plaintextBuf);
 }
 
@@ -1959,12 +2097,14 @@ async function encryptLocal(plaintext, passphrase) {
     const ciphertextBuf = await crypto.subtle.encrypt(
         { name: 'AES-GCM', iv }, key, enc.encode(plaintext)
     );
-    return JSON.stringify({
+    const result = JSON.stringify({
         v: LOCAL_ENCRYPT_VERSION,
         salt: btoa(String.fromCharCode(...salt)),
         iv: btoa(String.fromCharCode(...iv)),
         ciphertext: btoa(String.fromCharCode(...new Uint8Array(ciphertextBuf)))
     });
+    iv.fill(0);
+    return result;
 }
 
 /**
@@ -1991,6 +2131,8 @@ async function decryptLocal(envelopeStr, passphrase) {
     const plaintextBuf = await crypto.subtle.decrypt(
         { name: 'AES-GCM', iv }, key, ciphertext
     );
+    iv.fill(0);
+    ciphertext.fill(0);
     return new TextDecoder().decode(plaintextBuf);
 }
 
@@ -2108,30 +2250,43 @@ async function backupToNostr(silent = false) {
 
     console.log(`[relay] backupToNostr: called (silent=${silent})`);
 
-    if (!vault.privateKey) {
-        console.log('[relay] backupToNostr: no privateKey, aborting');
+    if (!_vaultInitialized && !vault.privateKey) {
+        console.log('[relay] backupToNostr: vault not initialized, aborting');
         if (!silent) showToast('Vault not initialized');
         return;
     }
 
     try {
-        const { sk, pk } = await getNostrKeyPair();
-        const sharedSecret = nip44.getSharedSecret(sk, pk);
-
+        let event;
         const vaultData = JSON.stringify({ users: vault.users, settings: vault.settings });
 
-        // NIP-44 self-encryption — seed-derived key is the only secret needed
-        const encrypted = nip44.encrypt(sharedSecret, vaultData);
-
-        const event = {
-            kind: 30078,
-            pubkey: pk,
-            created_at: Math.floor(Date.now() / 1000),
-            tags: [["d", BACKUP_D_TAG]],
-            content: encrypted,
-        };
-        event.id = getEventHash(event);
-        event.sig = await signEvent(event, sk);
+        if (invoke) {
+            // Tauri mode: encrypt and sign entirely in Rust — sk never touches JS
+            const pk = await invoke('cmd_get_nostr_pubkey');
+            const encrypted = await invoke('cmd_nip44_self_encrypt', { plaintext: vaultData });
+            const unsignedEvent = {
+                kind: 30078,
+                pubkey: pk,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: [["d", BACKUP_D_TAG]],
+                content: encrypted,
+            };
+            const signedJson = await invoke('cmd_sign_nostr_event', { eventJson: JSON.stringify(unsignedEvent) });
+            event = JSON.parse(signedJson);
+        } else {
+            const { sk, pk } = await getNostrKeyPair();
+            const sharedSecret = nip44.getSharedSecret(sk, pk);
+            const encrypted = nip44.encrypt(sharedSecret, vaultData);
+            event = {
+                kind: 30078,
+                pubkey: pk,
+                created_at: Math.floor(Date.now() / 1000),
+                tags: [["d", BACKUP_D_TAG]],
+                content: encrypted,
+            };
+            event.id = getEventHash(event);
+            event.sig = await signEvent(event, sk);
+        }
 
         console.log(`[relay] backupToNostr: starting parallel publish to ${RELAYS.length} relays`);
         setRelayStatus('syncing');
@@ -2216,15 +2371,26 @@ async function backupToNostr(silent = false) {
  *                                         If false and password is needed, throws.
  * @returns {Promise<string>} Decrypted plaintext JSON string.
  */
-async function decryptBackupEvent(event, sk, pk, interactive = true) {
-    const { nip44, nip04 } = window.NostrTools;
-
+async function decryptBackupEvent(event, sk, pk, interactive = true, useLegacy = false) {
     let layer2Decrypted;
-    if (event.kind === 30078) {
-        const sharedSecret = nip44.getSharedSecret(sk, pk);
-        layer2Decrypted = nip44.decrypt(sharedSecret, event.content);
+
+    if (invoke) {
+        // Tauri mode: decrypt in Rust — sk never touches JS
+        if (event.kind === 30078) {
+            const cmd = useLegacy ? 'cmd_nip44_legacy_decrypt' : 'cmd_nip44_self_decrypt';
+            layer2Decrypted = await invoke(cmd, { ciphertext: event.content });
+        } else {
+            const cmd = useLegacy ? 'cmd_nip04_legacy_decrypt' : 'cmd_nip04_decrypt';
+            layer2Decrypted = await invoke(cmd, { ciphertext: event.content, pubkey: event.pubkey });
+        }
     } else {
-        layer2Decrypted = await nip04.decrypt(sk, event.pubkey, event.content);
+        const { nip44, nip04 } = window.NostrTools;
+        if (event.kind === 30078) {
+            const sharedSecret = nip44.getSharedSecret(sk, pk);
+            layer2Decrypted = nip44.decrypt(sharedSecret, event.content);
+        } else {
+            layer2Decrypted = await nip04.decrypt(sk, event.pubkey, event.content);
+        }
     }
 
     // Check for double-encrypted v2 envelope
@@ -2266,7 +2432,7 @@ async function decryptBackupEvent(event, sk, pk, interactive = true) {
  * @returns {Promise<void>}
  */
 async function restoreFromNostr() {
-    if (!vault.privateKey) {
+    if (!_vaultInitialized && !vault.privateKey) {
         showToast('Vault not initialized');
         return;
     }
@@ -2312,7 +2478,7 @@ async function restoreFromNostr() {
         if (latest) {
             const decryptSk = usedLegacy ? legacySk : sk;
             const decryptPk = usedLegacy ? legacyPk : pk;
-            const decrypted = await decryptBackupEvent(latest, decryptSk, decryptPk, true);
+            const decrypted = await decryptBackupEvent(latest, decryptSk, decryptPk, true, usedLegacy);
             const data = JSON.parse(decrypted);
             mergeUsers(data.users);
             if (data.settings) vault.settings = { ...vault.settings, ...data.settings };
@@ -2347,7 +2513,7 @@ async function restoreFromNostr() {
  * @returns {Promise<void>}
  */
 async function openNostrHistory() {
-    if (!vault.privateKey) {
+    if (!_vaultInitialized && !vault.privateKey) {
         showToast('Vault not initialized');
         return;
     }
@@ -2463,12 +2629,12 @@ async function restoreFromId(eventId, eventKind) {
             // Try NIP-06 key first, then legacy
             let decrypted;
             try {
-                decrypted = await decryptBackupEvent(found, sk, pk, true);
+                decrypted = await decryptBackupEvent(found, sk, pk, true, false);
             } catch (e1) {
                 const legacy = await getLegacyNostrKeyPair();
                 if (legacy.pk !== pk) {
                     debugLog('restoreFromId: NIP-06 key failed, trying legacy...');
-                    decrypted = await decryptBackupEvent(found, legacy.sk, legacy.pk, true);
+                    decrypted = await decryptBackupEvent(found, legacy.sk, legacy.pk, true, true);
                 } else {
                     throw e1;
                 }
@@ -2665,7 +2831,7 @@ function resetInactivityTimer() {
     if (inactivityTimer) clearTimeout(inactivityTimer);
     // Lock vault after inactivity — with or without a master password.
     // No-password sessions are destroyed (the user accepted ephemerality).
-    if (vault.privateKey) {
+    if (_vaultInitialized || vault.privateKey) {
         inactivityTimer = setTimeout(() => {
             lockVault(true);
         }, INACTIVITY_TIMEOUT_MS);
@@ -2692,7 +2858,7 @@ function setupInactivityListeners() {
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
             hiddenAt = Date.now();
-        } else if (hiddenAt && vault.privateKey) {
+        } else if (hiddenAt && (_vaultInitialized || vault.privateKey)) {
             const elapsed = Date.now() - hiddenAt;
             hiddenAt = null;
             if (elapsed >= VISIBILITY_LOCK_MS) {
@@ -2740,7 +2906,16 @@ function setupKeyboardShortcuts() {
 // ============================================
 // Init
 // ============================================
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    // BIP39 wordlist integrity check — detect tampering
+    const wlHash = Array.from(new Uint8Array(
+        await crypto.subtle.digest('SHA-256', new TextEncoder().encode(words.join('\n')))
+    )).map(b => b.toString(16).padStart(2, '0')).join('');
+    if (wlHash !== '187db04a869dd9bc7be80d21a86497d692c0db6abd3aa8cb6be5d618ff757fae') {
+        document.body.innerHTML = '<h1 style="color:red;padding:2em">SECURITY ERROR: BIP39 wordlist integrity check failed. The application has been tampered with.</h1>';
+        throw new Error('BIP39 wordlist integrity check failed');
+    }
+
     setupInactivityListeners();
     setupKeyboardShortcuts();
 

@@ -14,8 +14,43 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Crypto primitives
+sha2 = "0.10"
+hmac = { version = "0.12", features = ["reset"] }
+pbkdf2 = "0.12"
+aes-gcm = "0.10"
+rand = "0.8"
+hex = "0.4"
+
+# BIP39 mnemonic generation/validation
+bip39 = { version = "2", features = ["zeroize"] }
+
+# secp256k1 EC operations (BIP32, Nostr key derivation)
+k256 = { version = "0.13", features = ["arithmetic", "schnorr"] }
+
+# Nostr protocol (NIP-44, NIP-04, event signing, nip19 encoding)
+nostr = { version = "0.37", features = ["nip44", "nip04"] }
+
+# Memory security
+zeroize = { version = "1", features = ["derive"] }
+secrecy = "0.10"
+memsec = "0.7"
+
+# Synchronization
+parking_lot = "0.12"
+
+# Platform-specific
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [profile.release]
-panic = "abort"
+# Changed from "abort" to "unwind" so that Drop (and thus zeroize-on-drop) runs on panic.
+# This is critical for secrecy::Secret<T> to zero secrets when a panic occurs.
+panic = "unwind"
 codegen-units = 1
 lto = true
 opt-level = "s"
