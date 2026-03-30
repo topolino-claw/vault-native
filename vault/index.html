@@ -20,6 +20,10 @@
             -webkit-tap-highlight-color: transparent;
         }
 
+        html {
+            overflow: hidden;
+        }
+
         :root {
             --bg: #0f0f0f;
             --surface: #1a1a1a;
@@ -214,7 +218,14 @@
         .screen-scroll {
             flex: 1;
             overflow-y: auto;
+            overflow-x: hidden;
             min-height: 0;
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        .screen-scroll::-webkit-scrollbar {
+            display: none;
         }
 
         @keyframes fadeIn {
@@ -308,22 +319,24 @@
         }
 
         .btn-secondary {
-            background: var(--surface);
-            color: var(--text);
-            border: 1px solid var(--border);
+            background: #1e3a4a;
+            color: #5eead4;
+            border: 1px solid #2dd4bf33;
         }
 
         .btn-secondary:hover, .btn-secondary:active {
-            background: var(--surface-hover);
+            background: #234e60;
         }
 
         .btn-ghost {
-            background: transparent;
-            color: var(--text-muted);
+            background: #1e1e2e;
+            color: #a1a1aa;
             padding: 12px;
+            border: 1px solid #2a2a3a;
         }
 
         .btn-ghost:hover {
+            background: #252538;
             color: var(--text);
         }
 
@@ -507,6 +520,27 @@
             display: flex;
             align-items: center;
             gap: 12px;
+        }
+
+        /* No-password warning badge */
+        .no-password-badge {
+            background: var(--danger);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 4px 10px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            cursor: pointer;
+            animation: pulse-danger 2s ease-in-out infinite;
+            white-space: nowrap;
+        }
+        .no-password-badge:hover {
+            filter: brightness(1.15);
+        }
+        @keyframes pulse-danger {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
         }
 
         /* Relay Status Indicator */
@@ -702,6 +736,46 @@
         .nonce-changed .nonce-value {
             color: var(--accent);
             font-weight: 600;
+        }
+
+        .number-stepper {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            margin: 4px 0;
+        }
+
+        .number-stepper button {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: var(--accent);
+            border: none;
+            color: white;
+            font-size: 20px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+
+        .number-stepper button:hover {
+            background: var(--accent-hover);
+        }
+
+        .number-stepper button:active {
+            transform: scale(0.95);
+        }
+
+        .number-stepper .stepper-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--text);
+            min-width: 48px;
+            text-align: center;
         }
 
         .nonce-changed button {
@@ -1094,6 +1168,7 @@
     <div id="mainScreen" class="screen hidden">
         <div class="header">
             <h1>Vault <span id="relayStatus" class="relay-status" data-status="idle" title="Relay: idle"></span></h1>
+            <button id="noPasswordBadge" class="no-password-badge hidden" title="No master password set — tap to fix">⚠ Unprotected</button>
             <button class="btn btn-ghost btn-icon" data-screen="settingsScreen">⚙️</button>
         </div>
         <div class="search-container">
@@ -1239,8 +1314,13 @@
             </div>
         </div>
         <div class="input-group">
-            <label>Password Hash Length (8-64)</label>
-            <input type="number" id="hashLengthSetting" min="8" max="64" value="16">
+            <label>Password Hash Length (8–64)</label>
+            <input type="hidden" id="hashLengthSetting" value="16">
+            <div class="number-stepper">
+                <button id="btnDecrementHash">−</button>
+                <span class="stepper-value" id="hashLengthDisplay">16</span>
+                <button id="btnIncrementHash">+</button>
+            </div>
             <p class="text-muted text-sm mt-8">Changing this will generate different passwords.</p>
         </div>
         <div class="settings-item">
@@ -1253,7 +1333,7 @@
                 <span class="toggle-slider"></span>
             </label>
         </div>
-        <button class="btn btn-secondary mt-16" id="btnSaveAdvancedSettings">
+        <button class="btn btn-primary mt-16" id="btnSaveAdvancedSettings">
             Save Settings
         </button>
         <div class="settings-item mt-24" data-action="showSeedPhrase">

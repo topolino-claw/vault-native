@@ -109,6 +109,7 @@ function showScreen(screenId) {
         if (hasVault) { showScreen('unlockScreen'); return; }
     } else if (screenId === 'mainScreen') {
         renderSiteList();
+        updateNoPasswordBadge();
     } else if (screenId === 'newWalletScreen') {
         generateNewSeed(true);
     } else if (screenId === 'backupScreen') {
@@ -116,7 +117,9 @@ function showScreen(screenId) {
     } else if (screenId === 'settingsScreen') {
         updateBackupWarningIndicator();
     } else if (screenId === 'advancedScreen') {
-        document.getElementById('hashLengthSetting').value = vault.settings.hashLength || 16;
+        const hl = vault.settings.hashLength || 16;
+        document.getElementById('hashLengthSetting').value = hl;
+        document.getElementById('hashLengthDisplay').textContent = hl;
         debugMode = vault.settings.debugMode || false;
         document.getElementById('debugModeToggle').checked = debugMode;
     }
@@ -934,21 +937,23 @@ async function silentRestoreFromNostr() {
 async function lockVault(skipConfirm = false) {
     // No-password sessions: vault lives only in memory and cannot be recovered.
     if (!_masterPassword && vault.privateKey) {
-        // Auto-lock (inactivity / visibility): silently skip — nothing to unlock against.
-        if (skipConfirm) return;
-
-        // Manual lock: single clear dialog with action-oriented buttons.
-        const choice = await showConfirm(
-            'No master password is set!\n\n' +
-            'Your vault exists only in memory and will be PERMANENTLY LOST if you lock now.\n\n' +
-            'Set a password to protect your vault, or lock anyway (destroys vault).',
-            { okLabel: 'Set Password', cancelLabel: 'Destroy Vault', cancelDanger: true }
-        );
-        if (choice) {
-            showScreen('setMasterPasswordScreen');
-            return;
+        if (skipConfirm) {
+            // Auto-lock (inactivity / visibility): destroy the vault silently.
+            var destroyed = true;
+        } else {
+            // Manual lock: offer to set a password first.
+            const choice = await showConfirm(
+                'No password is set!\n\n' +
+                'Your vault exists only in memory and will be PERMANENTLY LOST if you lock now without password.\n\n' +
+                'Set a password to protect your vault, or lock anyway (destroys vault).',
+                { okLabel: 'Set Password', cancelLabel: 'Destroy Vault', cancelDanger: true }
+            );
+            if (choice) {
+                showScreen('setMasterPasswordScreen');
+                return;
+            }
+            var destroyed = true;
         }
-        var destroyed = true;
     } else if (!skipConfirm && vault.privateKey) {
         if (!await showConfirm('Lock vault? You\'ll need your password to unlock again.')) return;
     }
@@ -1414,6 +1419,15 @@ async function setMasterPassword() {
 function skipMasterPassword() {
     _masterPassword = null;
     showScreen('mainScreen');
+}
+
+/**
+ * Show/hide the "Unprotected" badge based on password state.
+ */
+function updateNoPasswordBadge() {
+    const badge = document.getElementById('noPasswordBadge');
+    if (!badge) return;
+    badge.classList.toggle('hidden', !!_masterPassword);
 }
 
 /**
@@ -2649,9 +2663,9 @@ function selectSuggestion(word) {
  */
 function resetInactivityTimer() {
     if (inactivityTimer) clearTimeout(inactivityTimer);
-    // Only set timer if vault is unlocked AND a master password exists
-    // (no-password sessions can't be recovered after lock, so don't auto-lock them)
-    if (vault.privateKey && _masterPassword) {
+    // Lock vault after inactivity — with or without a master password.
+    // No-password sessions are destroyed (the user accepted ephemerality).
+    if (vault.privateKey) {
         inactivityTimer = setTimeout(() => {
             lockVault(true);
         }, INACTIVITY_TIMEOUT_MS);
@@ -2673,12 +2687,12 @@ function setupInactivityListeners() {
         document.addEventListener(evt, resetInactivityTimer, { passive: true });
     });
 
-    // Lock vault when tab is hidden for too long (e.g. user switches app)
-    // Skip for no-password sessions — they can't be recovered after lock.
+    // Lock vault when tab is hidden for too long (e.g. user switches app).
+    // No-password sessions are destroyed — the user accepted ephemerality.
     document.addEventListener('visibilitychange', () => {
         if (document.hidden) {
             hiddenAt = Date.now();
-        } else if (hiddenAt && vault.privateKey && _masterPassword) {
+        } else if (hiddenAt && vault.privateKey) {
             const elapsed = Date.now() - hiddenAt;
             hiddenAt = null;
             if (elapsed >= VISIBILITY_LOCK_MS) {
@@ -2792,6 +2806,7 @@ document.addEventListener('DOMContentLoaded', () => {
         btnOpenNostrHistory: () => openNostrHistory(),
         btnSetMasterPassword: () => setMasterPassword(),
         btnSkipMasterPassword: () => skipMasterPassword(),
+        noPasswordBadge: () => showScreen('setMasterPasswordScreen'),
         btnDeleteAllData: () => deleteAllData(),
         btnDeleteAllDataUnlock: () => deleteAllData(),
         btnDownloadData: () => downloadData(),
@@ -2859,6 +2874,16 @@ document.addEventListener('DOMContentLoaded', () => {
             if (e.key === 'Enter') saveAdvancedSettings();
         });
     }
+
+    function updateHashLength(delta) {
+        const input = document.getElementById('hashLengthSetting');
+        const display = document.getElementById('hashLengthDisplay');
+        let val = Math.min(64, Math.max(8, (parseInt(input.value) || 16) + delta));
+        input.value = val;
+        display.textContent = val;
+    }
+    document.getElementById('btnDecrementHash')?.addEventListener('click', () => updateHashLength(-1));
+    document.getElementById('btnIncrementHash')?.addEventListener('click', () => updateHashLength(1));
 
     const debugModeToggle = document.getElementById('debugModeToggle');
     if (debugModeToggle) {
