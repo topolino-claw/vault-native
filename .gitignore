@@ -1,6 +1,12 @@
 # IDE
 .idea/
 
+# OS
+.DS_Store
+
+# Node
+node_modules/
+
 # Rust build output
 src-tauri/target/
 
