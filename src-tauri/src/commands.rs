@@ -25,6 +25,10 @@ pub fn cmd_initialize_vault(
     passphrase: String,
     vault: State<'_, AppVault>,
 ) -> Result<VaultPublicInfo, String> {
+    if !crypto::verify_seed_phrase(&seed_phrase) {
+        return Err("Invalid BIP39 seed phrase (bad checksum or unknown words)".to_string());
+    }
+
     let (secrets, nostr_keys, legacy_nostr_keys) =
         crypto::initialize_vault_secrets(&seed_phrase, &passphrase)?;
 
@@ -231,6 +235,9 @@ pub fn cmd_set_vault_users(
     users_json: String,
     vault: State<'_, AppVault>,
 ) -> Result<(), String> {
+    if !vault.is_unlocked() {
+        return Err("Vault is locked".to_string());
+    }
     let users: HashMap<String, HashMap<String, u64>> =
         serde_json::from_str(&users_json).map_err(|e| format!("Invalid users JSON: {}", e))?;
     vault.data.lock().users = users;
@@ -242,6 +249,9 @@ pub fn cmd_set_vault_settings(
     settings_json: String,
     vault: State<'_, AppVault>,
 ) -> Result<(), String> {
+    if !vault.is_unlocked() {
+        return Err("Vault is locked".to_string());
+    }
     let settings: VaultSettings =
         serde_json::from_str(&settings_json)
             .map_err(|e| format!("Invalid settings JSON: {}", e))?;
@@ -251,6 +261,9 @@ pub fn cmd_set_vault_settings(
 
 #[tauri::command]
 pub fn cmd_get_vault_data(vault: State<'_, AppVault>) -> Result<String, String> {
+    if !vault.is_unlocked() {
+        return Err("Vault is locked".to_string());
+    }
     let data = vault.data.lock();
     serde_json::to_string(&*data).map_err(|e| format!("Serialize failed: {}", e))
 }
@@ -260,6 +273,9 @@ pub fn cmd_merge_users(
     remote_users_json: String,
     vault: State<'_, AppVault>,
 ) -> Result<(), String> {
+    if !vault.is_unlocked() {
+        return Err("Vault is locked".to_string());
+    }
     let remote_users: HashMap<String, HashMap<String, u64>> =
         serde_json::from_str(&remote_users_json)
             .map_err(|e| format!("Invalid remote users JSON: {}", e))?;
@@ -295,31 +311,10 @@ pub fn cmd_get_npub(vault: State<'_, AppVault>) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn cmd_get_nsec(vault: State<'_, AppVault>) -> Result<String, String> {
-    let keys = vault.nostr_keys.lock();
-    let keys = keys.as_ref().ok_or("Vault is locked")?;
-    crypto::hex_to_nsec(&keys.sk_hex)
-}
-
-#[tauri::command]
-pub fn cmd_get_nostr_hex_sk(vault: State<'_, AppVault>) -> Result<String, String> {
-    let keys = vault.nostr_keys.lock();
-    let keys = keys.as_ref().ok_or("Vault is locked")?;
-    Ok(keys.sk_hex.clone())
-}
-
-#[tauri::command]
 pub fn cmd_get_legacy_nostr_pubkey(vault: State<'_, AppVault>) -> Result<String, String> {
     let keys = vault.legacy_nostr_keys.lock();
     let keys = keys.as_ref().ok_or("No legacy keys available")?;
     Ok(keys.pk_hex.clone())
-}
-
-#[tauri::command]
-pub fn cmd_get_legacy_nostr_sk(vault: State<'_, AppVault>) -> Result<String, String> {
-    let keys = vault.legacy_nostr_keys.lock();
-    let keys = keys.as_ref().ok_or("No legacy keys available")?;
-    Ok(keys.sk_hex.clone())
 }
 
 // ── Nostr Event Signing ─────────────────────────────────────────────────

@@ -58,6 +58,7 @@ function mergeUsers(remoteUsers) {
     Object.entries(remoteUsers).forEach(([user, sites]) => {
         if (!vault.users[user]) vault.users[user] = {};
         Object.entries(sites).forEach(([site, nonce]) => {
+            if (!Number.isInteger(nonce) || nonce < 0) return; // skip invalid nonces
             if (vault.users[user][site] === undefined || nonce > vault.users[user][site]) {
                 vault.users[user][site] = nonce;
             }
@@ -689,17 +690,33 @@ async function confirmSeedBackup() {
     indices.forEach(i => {
         const div = document.createElement('div');
         div.className = 'input-group';
+        div.style.position = 'relative';
         div.innerHTML = `
             <label>Word #${i + 1}</label>
-            <input type="text" class="verify-word" data-index="${i}" placeholder="Enter word ${i + 1}">
+            <input type="text" class="verify-word" data-index="${i}" placeholder="Enter word ${i + 1}"
+                   autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+            <div class="seed-suggestions hidden"></div>
         `;
         container.appendChild(div);
     });
 
-    // Bind Enter key on dynamically created verify inputs
-    container.querySelectorAll('.verify-word').forEach(input => {
+    const verifyInputs = container.querySelectorAll('.verify-word');
+    verifyInputs.forEach((input, position) => {
+        const suggestionsEl = input.parentElement.querySelector('.seed-suggestions');
+
+        attachBip39Autocomplete(input, suggestionsEl, {
+            singleWord: true,
+            onSelect: () => {
+                const nextInput = verifyInputs[position + 1];
+                if (nextInput) nextInput.focus();
+            }
+        });
+
+        // Enter submits only when suggestions are hidden
         input.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') verifySeedBackup();
+            if (e.key === 'Enter' && suggestionsEl.classList.contains('hidden')) {
+                verifySeedBackup();
+            }
         });
     });
 
@@ -1029,6 +1046,8 @@ async function lockVault(skipConfirm = false) {
     inactivityTimer = null;
     if (clipboardClearTimer) clearTimeout(clipboardClearTimer);
     clipboardClearTimer = null;
+    if (_backupDebounceTimer) clearTimeout(_backupDebounceTimer);
+    _backupDebounceTimer = null;
     try { navigator.clipboard.writeText('').catch(() => {}); } catch (_) {}
     // Zero secrets in Rust — must complete before we touch JS state
     if (invoke) {
@@ -1235,10 +1254,7 @@ function escapeHtml(str) {
     return div.innerHTML;
 }
 
-/** Escape a string for safe use inside a JS string literal in an HTML attribute (onclick, etc.) */
-function escapeJsString(str) {
-    return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-}
+
 
 // ============================================
 // Password Generation Screen
@@ -1809,7 +1825,7 @@ async function saveAdvancedSettings() {
 function toggleDebugMode() {
     debugMode = document.getElementById('debugModeToggle').checked;
     vault.settings.debugMode = debugMode;
-    backupToNostrDebounced();
+    // Debug mode is a UI preference — no need to backup to relays for this change
 }
 
 /**
@@ -1863,7 +1879,11 @@ async function copySeedPhrase() {
     const seedPhrase = invoke ? await invoke('cmd_get_seed_phrase') : vault.seedPhrase;
     navigator.clipboard.writeText(seedPhrase).then(() => {
         showToast('Seed phrase copied — clipboard clears in 15s');
-        setTimeout(() => navigator.clipboard.writeText('').catch(() => {}), 15000);
+        if (clipboardClearTimer) clearTimeout(clipboardClearTimer);
+        clipboardClearTimer = setTimeout(() => {
+            navigator.clipboard.writeText('').catch(() => {});
+            clipboardClearTimer = null;
+        }, 15000);
     });
 }
 
@@ -2291,19 +2311,7 @@ async function backupToNostr(silent = false) {
         if (invoke) {
             // Tauri mode: encrypt with JS NIP-44 (for cross-implementation compat), sign in Rust
             const pk = await invoke('cmd_get_nostr_pubkey');
-            let encrypted;
-            try {
-                encrypted = await invoke('cmd_nip44_self_encrypt', { plaintext: vaultData });
-            } catch (rustErr) {
-                console.warn('backupToNostr: Rust NIP-44 encrypt failed, falling back to JS:', rustErr);
-                let jsSk = await invoke('cmd_get_nostr_hex_sk');
-                try {
-                    const sharedSecret = nip44.getSharedSecret(jsSk, pk);
-                    encrypted = nip44.encrypt(sharedSecret, vaultData);
-                } finally {
-                    if (jsSk) { jsSk = '0'.repeat(jsSk.length); jsSk = null; }
-                }
-            }
+            const encrypted = await invoke('cmd_nip44_self_encrypt', { plaintext: vaultData });
             const unsignedEvent = {
                 kind: 30078,
                 pubkey: pk,
@@ -2415,34 +2423,13 @@ async function decryptBackupEvent(event, sk, pk, interactive = true, useLegacy =
     let layer2Decrypted;
 
     if (invoke) {
-        // Tauri mode: try Rust first, fall back to JS if Rust NIP-44/04 is incompatible
-        try {
-            if (event.kind === 30078) {
-                const cmd = useLegacy ? 'cmd_nip44_legacy_decrypt' : 'cmd_nip44_self_decrypt';
-                layer2Decrypted = await invoke(cmd, { ciphertext: event.content });
-            } else {
-                const cmd = useLegacy ? 'cmd_nip04_legacy_decrypt' : 'cmd_nip04_decrypt';
-                layer2Decrypted = await invoke(cmd, { ciphertext: event.content, pubkey: event.pubkey });
-            }
-        } catch (rustErr) {
-            // Rust decrypt failed — fall back to JS with key retrieved from Rust
-            console.warn('decryptBackupEvent: Rust decrypt failed, falling back to JS:', rustErr);
-            const skCmd = useLegacy ? 'cmd_get_legacy_nostr_sk' : 'cmd_get_nostr_hex_sk';
-            const pkCmd = useLegacy ? 'cmd_get_legacy_nostr_pubkey' : 'cmd_get_nostr_pubkey';
-            let jsSk = await invoke(skCmd);
-            const jsPk = await invoke(pkCmd);
-            try {
-                const { nip44, nip04 } = window.NostrTools;
-                if (event.kind === 30078) {
-                    const sharedSecret = nip44.getSharedSecret(jsSk, jsPk);
-                    layer2Decrypted = nip44.decrypt(sharedSecret, event.content);
-                } else {
-                    layer2Decrypted = await nip04.decrypt(jsSk, event.pubkey, event.content);
-                }
-            } finally {
-                // Zero the sk from JS memory immediately
-                if (jsSk) { jsSk = '0'.repeat(jsSk.length); jsSk = null; }
-            }
+        // Tauri mode: all decryption happens in Rust (secret keys never leave Rust)
+        if (event.kind === 30078) {
+            const cmd = useLegacy ? 'cmd_nip44_legacy_decrypt' : 'cmd_nip44_self_decrypt';
+            layer2Decrypted = await invoke(cmd, { ciphertext: event.content });
+        } else {
+            const cmd = useLegacy ? 'cmd_nip04_legacy_decrypt' : 'cmd_nip04_decrypt';
+            layer2Decrypted = await invoke(cmd, { ciphertext: event.content, pubkey: event.pubkey });
         }
     } else {
         const { nip44, nip04 } = window.NostrTools;
@@ -2723,159 +2710,125 @@ async function restoreFromId(eventId, eventKind) {
 // ============================================
 // Seed Phrase Autocomplete
 // ============================================
-let activeSuggestionIndex = -1;
-let currentSuggestions = [];
 
 /**
- * Handle input events on the seed phrase textarea.
- * Extracts the current word being typed, queries the BIP39 word list for prefix
- * matches, and displays up to 6 suggestions.
+ * Attach BIP39 autocomplete to any input or textarea element.
+ * Each call creates isolated state so multiple inputs can have independent suggestions.
  *
- * @param {InputEvent} event - The input event from the seed phrase textarea.
+ * @param {HTMLInputElement|HTMLTextAreaElement} inputEl
+ * @param {HTMLElement} suggestionsEl - Container to render suggestion items into.
+ * @param {Object} [options]
+ * @param {boolean} [options.singleWord] - Treat entire value as one word (for single-word inputs).
+ * @param {Function} [options.onWordCountUpdate] - Called with current word count on input.
+ * @param {Function} [options.onSelect] - Called after a suggestion is accepted.
  */
-function onSeedInput(event) {
-    const textarea = event.target;
-    const value = textarea.value;
-    const cursorPos = textarea.selectionStart;
+function attachBip39Autocomplete(inputEl, suggestionsEl, options = {}) {
+    let activeSuggestionIndex = -1;
+    let currentSuggestions = [];
 
-    // Extract the word currently being typed (letters only, before the cursor)
-    const beforeCursor = value.slice(0, cursorPos);
-    const wordMatch = beforeCursor.match(/[a-z]+$/i);
-    const currentWord = wordMatch ? wordMatch[0].toLowerCase() : '';
-
-    // Update word count display
-    const wordCount = value.trim().split(/\s+/).filter(w => w.length > 0).length;
-    document.getElementById('wordCount').textContent = wordCount;
-
-    const suggestions = document.getElementById('seedSuggestions');
-
-    if (currentWord.length < 1) {
-        suggestions.classList.add('hidden');
-        currentSuggestions = [];
-        return;
+    function getTypedWord() {
+        if (options.singleWord) return inputEl.value.trim().toLowerCase();
+        const cursorPos = inputEl.selectionStart;
+        const beforeCursor = inputEl.value.slice(0, cursorPos);
+        const match = beforeCursor.match(/[a-z]+$/i);
+        return match ? match[0].toLowerCase() : '';
     }
 
-    // Find BIP39 words that start with the typed prefix
-    currentSuggestions = words
-        .filter(w => w.startsWith(currentWord))
-        .slice(0, 6);
+    function render(typed) {
+        suggestionsEl.innerHTML = currentSuggestions.map((word, i) => {
+            const matchPart = word.slice(0, typed.length);
+            const restPart = word.slice(typed.length);
+            return `<div class="seed-suggestion ${i === activeSuggestionIndex ? 'active' : ''}"
+                         data-suggestion="${word}">
+                <span class="seed-suggestion-match">${matchPart}</span>${restPart}
+            </div>`;
+        }).join('');
 
-    if (currentSuggestions.length === 0) {
-        suggestions.classList.add('hidden');
-        return;
+        suggestionsEl.querySelectorAll('[data-suggestion]').forEach(el => {
+            // Prevent blur on the input so the click can fire (critical on mobile)
+            el.addEventListener('mousedown', e => e.preventDefault());
+            el.addEventListener('click', () => selectWord(el.dataset.suggestion));
+        });
     }
 
-    // Hide suggestions if there's an exact single match (word is complete)
-    if (currentSuggestions.length === 1 && currentSuggestions[0] === currentWord) {
-        suggestions.classList.add('hidden');
-        return;
-    }
-
-    activeSuggestionIndex = 0;
-    renderSuggestions(currentWord);
-    suggestions.classList.remove('hidden');
-}
-
-/**
- * Render the autocomplete suggestion list, highlighting the currently typed prefix
- * in bold and marking the active suggestion.
- *
- * @param {string} typed - The current typed prefix to highlight in each suggestion.
- */
-function renderSuggestions(typed) {
-    const suggestions = document.getElementById('seedSuggestions');
-    suggestions.innerHTML = currentSuggestions.map((word, i) => {
-        const matchPart = word.slice(0, typed.length);
-        const restPart = word.slice(typed.length);
-        return `<div class="seed-suggestion ${i === activeSuggestionIndex ? 'active' : ''}" 
-                     data-suggestion="${word}">
-            <span class="seed-suggestion-match">${matchPart}</span>${restPart}
-        </div>`;
-    }).join('');
-
-    // Bind click events on suggestions
-    suggestions.querySelectorAll('[data-suggestion]').forEach(el => {
-        el.addEventListener('click', () => selectSuggestion(el.dataset.suggestion));
-    });
-}
-
-/**
- * Handle keyboard navigation within the seed phrase autocomplete suggestions.
- * Supports ArrowUp/ArrowDown to move selection, Tab/Enter to confirm, Escape to dismiss.
- *
- * @param {KeyboardEvent} event - The keydown event from the seed phrase textarea.
- */
-function onSeedKeydown(event) {
-    const suggestions = document.getElementById('seedSuggestions');
-
-    if (suggestions.classList.contains('hidden') || currentSuggestions.length === 0) {
-        return;
-    }
-
-    if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        activeSuggestionIndex = (activeSuggestionIndex + 1) % currentSuggestions.length;
-        renderSuggestions(getCurrentTypedWord());
-    } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        activeSuggestionIndex = activeSuggestionIndex <= 0
-            ? currentSuggestions.length - 1
-            : activeSuggestionIndex - 1;
-        renderSuggestions(getCurrentTypedWord());
-    } else if (event.key === 'Tab' || event.key === 'Enter') {
-        if (currentSuggestions.length > 0) {
-            event.preventDefault();
-            selectSuggestion(currentSuggestions[activeSuggestionIndex]);
+    function selectWord(word) {
+        if (options.singleWord) {
+            inputEl.value = word;
+        } else {
+            const cursorPos = inputEl.selectionStart;
+            const value = inputEl.value;
+            const beforeCursor = value.slice(0, cursorPos);
+            const match = beforeCursor.match(/[a-z]+$/i);
+            const wordStart = match ? cursorPos - match[0].length : cursorPos;
+            const newValue = value.slice(0, wordStart) + word + ' ' + value.slice(cursorPos);
+            inputEl.value = newValue;
+            const newCursorPos = wordStart + word.length + 1;
+            inputEl.setSelectionRange(newCursorPos, newCursorPos);
         }
-    } else if (event.key === 'Escape') {
-        suggestions.classList.add('hidden');
+
+        inputEl.focus();
+        suggestionsEl.classList.add('hidden');
+        currentSuggestions = [];
+
+        if (options.onWordCountUpdate && !options.singleWord) {
+            const count = inputEl.value.trim().split(/\s+/).filter(w => w.length > 0).length;
+            options.onWordCountUpdate(count);
+        }
+        if (options.onSelect) options.onSelect(word);
     }
-}
 
-/**
- * Get the word currently being typed at the cursor position in the seed textarea.
- *
- * @returns {string} The current partial word (lowercase), or empty string if none.
- */
-function getCurrentTypedWord() {
-    const textarea = document.getElementById('restoreSeedInput');
-    const cursorPos = textarea.selectionStart;
-    const beforeCursor = textarea.value.slice(0, cursorPos);
-    const wordMatch = beforeCursor.match(/[a-z]+$/i);
-    return wordMatch ? wordMatch[0].toLowerCase() : '';
-}
+    inputEl.addEventListener('input', () => {
+        const currentWord = getTypedWord();
 
-/**
- * Insert a selected suggestion word into the seed textarea, replacing the
- * current partial word and appending a space.
- *
- * @param {string} word - The BIP39 word to insert.
- */
-function selectSuggestion(word) {
-    const textarea = document.getElementById('restoreSeedInput');
-    const cursorPos = textarea.selectionStart;
-    const value = textarea.value;
+        if (options.onWordCountUpdate && !options.singleWord) {
+            const count = inputEl.value.trim().split(/\s+/).filter(w => w.length > 0).length;
+            options.onWordCountUpdate(count);
+        }
 
-    // Find where the current partial word starts
-    const beforeCursor = value.slice(0, cursorPos);
-    const wordMatch = beforeCursor.match(/[a-z]+$/i);
-    const wordStart = wordMatch ? cursorPos - wordMatch[0].length : cursorPos;
+        if (currentWord.length < 1) {
+            suggestionsEl.classList.add('hidden');
+            currentSuggestions = [];
+            return;
+        }
 
-    // Replace current partial word with the selected word + a trailing space
-    const newValue = value.slice(0, wordStart) + word + ' ' + value.slice(cursorPos);
-    textarea.value = newValue;
+        currentSuggestions = words.filter(w => w.startsWith(currentWord)).slice(0, 6);
 
-    // Place cursor after the inserted word and space
-    const newCursorPos = wordStart + word.length + 1;
-    textarea.setSelectionRange(newCursorPos, newCursorPos);
-    textarea.focus();
+        if (currentSuggestions.length === 0 ||
+            (currentSuggestions.length === 1 && currentSuggestions[0] === currentWord)) {
+            suggestionsEl.classList.add('hidden');
+            return;
+        }
 
-    // Hide suggestions and update word count
-    document.getElementById('seedSuggestions').classList.add('hidden');
-    currentSuggestions = [];
+        activeSuggestionIndex = 0;
+        render(currentWord);
+        suggestionsEl.classList.remove('hidden');
+    });
 
-    const wordCount = newValue.trim().split(/\s+/).filter(w => w.length > 0).length;
-    document.getElementById('wordCount').textContent = wordCount;
+    inputEl.addEventListener('keydown', (event) => {
+        if (suggestionsEl.classList.contains('hidden') || currentSuggestions.length === 0) return;
+
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            activeSuggestionIndex = (activeSuggestionIndex + 1) % currentSuggestions.length;
+            render(getTypedWord());
+        } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            activeSuggestionIndex = activeSuggestionIndex <= 0
+                ? currentSuggestions.length - 1
+                : activeSuggestionIndex - 1;
+            render(getTypedWord());
+        } else if (event.key === 'Tab' || event.key === 'Enter') {
+            event.preventDefault();
+            selectWord(currentSuggestions[activeSuggestionIndex]);
+        } else if (event.key === 'Escape') {
+            suggestionsEl.classList.add('hidden');
+        }
+    });
+
+    // Dismiss suggestions when input loses focus (delayed so click/tap can fire first)
+    inputEl.addEventListener('blur', () => {
+        setTimeout(() => suggestionsEl.classList.add('hidden'), 200);
+    });
 }
 
 // ============================================
@@ -3026,9 +2979,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (navigationStack.length > 1) {
             navigationStack.pop();
             const prev = navigationStack[navigationStack.length - 1] || 'welcomeScreen';
-            document.querySelectorAll('.screen').forEach(s => s.classList.add('hidden'));
-            const target = document.getElementById(prev);
-            if (target) target.classList.remove('hidden');
+            showScreen(prev);
         }
     });
 
@@ -3099,9 +3050,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ── Input event listeners ──
     // Note: Enter key handling is done globally in setupKeyboardShortcuts()
     const restoreSeedInput = document.getElementById('restoreSeedInput');
-    if (restoreSeedInput) {
-        restoreSeedInput.addEventListener('input', (e) => onSeedInput(e));
-        restoreSeedInput.addEventListener('keydown', (e) => onSeedKeydown(e));
+    const seedSuggestions = document.getElementById('seedSuggestions');
+    if (restoreSeedInput && seedSuggestions) {
+        attachBip39Autocomplete(restoreSeedInput, seedSuggestions, {
+            singleWord: false,
+            onWordCountUpdate: (count) => {
+                document.getElementById('wordCount').textContent = count;
+            }
+        });
     }
 
     const siteSearch = document.getElementById('siteSearch');

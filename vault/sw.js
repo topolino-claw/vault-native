@@ -38,9 +38,9 @@ self.addEventListener('fetch', (event) => {
         // Return cached, but update in background
         const fetchPromise = fetch(event.request).then((response) => {
           if (response.ok) {
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, response));
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, response.clone()));
           }
-          return response.clone();
+          return response;
         }).catch(() => {});
         return cached;
       }

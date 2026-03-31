@@ -38,13 +38,10 @@ pub fn run() {
             commands::cmd_set_vault_settings,
             commands::cmd_get_vault_data,
             commands::cmd_merge_users,
-            // Nostr keys
+            // Nostr keys (public only — secret keys never leave Rust)
             commands::cmd_get_nostr_pubkey,
             commands::cmd_get_npub,
-            commands::cmd_get_nsec,
-            commands::cmd_get_nostr_hex_sk,
             commands::cmd_get_legacy_nostr_pubkey,
-            commands::cmd_get_legacy_nostr_sk,
             // Nostr event signing
             commands::cmd_sign_nostr_event,
             commands::cmd_sign_nostr_event_legacy,

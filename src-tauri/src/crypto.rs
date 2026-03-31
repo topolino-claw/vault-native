@@ -348,6 +348,7 @@ fn bip32_normal_child(
 }
 
 /// (a + b) mod N for secp256k1.
+/// Returns error if the result is zero (invalid per BIP32 spec).
 fn secp256k1_mod_add(a: &[u8], b: &[u8]) -> Result<[u8; 32], String> {
     use k256::elliptic_curve::ops::Reduce;
     use k256::U256;
@@ -355,6 +356,10 @@ fn secp256k1_mod_add(a: &[u8], b: &[u8]) -> Result<[u8; 32], String> {
     let a_scalar = <Scalar as Reduce<U256>>::reduce_bytes(a.into());
     let b_scalar = <Scalar as Reduce<U256>>::reduce_bytes(b.into());
     let sum = a_scalar + b_scalar;
+
+    if sum.is_zero().into() {
+        return Err("BIP32 derivation produced zero scalar — invalid key".to_string());
+    }
 
     let bytes = sum.to_bytes();
     let mut result = [0u8; 32];
@@ -472,22 +477,31 @@ pub fn decrypt_local(envelope_str: &str, passphrase: &str) -> Result<String, Str
 
 // ── Backup encryption (Layer 1, matching JS backup password flow) ───────
 
-const BACKUP_ENCRYPTED_VERSION: u32 = 2;
+const BACKUP_ENCRYPTED_VERSION: u32 = 3;
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct BackupEnvelope {
     v: u32,
+    #[serde(default)]
+    salt: String,
     iv: String,
     ciphertext: String,
 }
 
-/// Encrypt with backup password (Layer 1). Uses npub_hex as PBKDF2 salt.
+/// Encrypt with backup password (Layer 1). Uses random salt for PBKDF2.
 pub fn encrypt_with_backup_password(
     plaintext: &str,
     password: &str,
-    npub_hex: &str,
+    _npub_hex: &str,
 ) -> Result<String, String> {
-    let mut key_bytes = derive_local_key(password.as_bytes(), npub_hex.as_bytes());
+    if password.len() < 8 {
+        return Err("Backup password must be at least 8 characters".to_string());
+    }
+
+    let mut salt = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut salt);
+
+    let mut key_bytes = derive_local_key(password.as_bytes(), &salt);
 
     let cipher = Aes256Gcm::new_from_slice(&key_bytes)
         .map_err(|e| format!("AES key init failed: {}", e))?;
@@ -503,6 +517,7 @@ pub fn encrypt_with_backup_password(
 
     let envelope = BackupEnvelope {
         v: BACKUP_ENCRYPTED_VERSION,
+        salt: base64_encode(&salt),
         iv: base64_encode(&iv_bytes),
         ciphertext: base64_encode(&ciphertext),
     };
@@ -513,6 +528,7 @@ pub fn encrypt_with_backup_password(
 }
 
 /// Decrypt Layer 1 backup envelope.
+/// Supports v3 (random salt) and v2 (legacy: npub_hex as salt) for backward compatibility.
 pub fn decrypt_with_backup_password(
     envelope_str: &str,
     password: &str,
@@ -521,14 +537,16 @@ pub fn decrypt_with_backup_password(
     let envelope: BackupEnvelope =
         serde_json::from_str(envelope_str).map_err(|e| format!("Invalid envelope: {}", e))?;
 
-    if envelope.v != BACKUP_ENCRYPTED_VERSION {
-        return Err(format!("Unknown backup version: {}", envelope.v));
-    }
+    let salt_bytes = match envelope.v {
+        3 => base64_decode(&envelope.salt)?,
+        2 => npub_hex.as_bytes().to_vec(),
+        v => return Err(format!("Unknown backup version: {}", v)),
+    };
 
     let iv = base64_decode(&envelope.iv)?;
     let ciphertext = base64_decode(&envelope.ciphertext)?;
 
-    let mut key_bytes = derive_local_key(password.as_bytes(), npub_hex.as_bytes());
+    let mut key_bytes = derive_local_key(password.as_bytes(), &salt_bytes);
 
     let cipher = Aes256Gcm::new_from_slice(&key_bytes)
         .map_err(|e| format!("AES key init failed: {}", e))?;
@@ -548,12 +566,6 @@ pub fn decrypt_with_backup_password(
 pub fn hex_to_npub(hex_pk: &str) -> Result<String, String> {
     let bytes = hex::decode(hex_pk).map_err(|e| format!("Invalid hex: {}", e))?;
     bech32_encode("npub", &bytes)
-}
-
-/// Convert hex secret key to nsec bech32 string.
-pub fn hex_to_nsec(hex_sk: &str) -> Result<String, String> {
-    let bytes = hex::decode(hex_sk).map_err(|e| format!("Invalid hex: {}", e))?;
-    bech32_encode("nsec", &bytes)
 }
 
 /// Simple bech32 encoding (Nostr uses bech32, not bech32m).
@@ -856,13 +868,48 @@ mod tests {
         let password = "backup_pass_123";
         let npub_hex = "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234f9d834e34";
 
+        // v3: random salt
         let encrypted = encrypt_with_backup_password(plaintext, password, npub_hex).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&encrypted).unwrap();
+        assert_eq!(parsed["v"], 3);
+        assert!(parsed["salt"].is_string());
         let decrypted = decrypt_with_backup_password(&encrypted, password, npub_hex).unwrap();
         assert_eq!(plaintext, decrypted);
 
         // Wrong password should fail
-        let result = decrypt_with_backup_password(&encrypted, "wrong", npub_hex);
+        let result = decrypt_with_backup_password(&encrypted, "wrong_pw!", npub_hex);
         assert!(result.is_err());
+
+        // Short password should be rejected
+        let result = encrypt_with_backup_password(plaintext, "short", npub_hex);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_backup_password_v2_compat() {
+        // Simulate a v2 envelope (salt derived from npub_hex)
+        let plaintext = r#"{"users":{"bob":{"site.com":1}}}"#;
+        let password = "legacy_pass_123";
+        let npub_hex = "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234f9d834e34";
+
+        // Manually create a v2 envelope
+        let mut key_bytes = derive_local_key(password.as_bytes(), npub_hex.as_bytes());
+        let cipher = Aes256Gcm::new_from_slice(&key_bytes).unwrap();
+        key_bytes.zeroize();
+        let mut iv_bytes = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut iv_bytes);
+        let nonce = Nonce::from_slice(&iv_bytes);
+        let ciphertext = cipher.encrypt(nonce, plaintext.as_bytes()).unwrap();
+        let v2_envelope = serde_json::json!({
+            "v": 2,
+            "iv": base64_encode(&iv_bytes),
+            "ciphertext": base64_encode(&ciphertext),
+        });
+        let v2_str = serde_json::to_string(&v2_envelope).unwrap();
+
+        // Decrypt v2 envelope — should use npub_hex as salt
+        let decrypted = decrypt_with_backup_password(&v2_str, password, npub_hex).unwrap();
+        assert_eq!(plaintext, decrypted);
     }
 
     #[test]
