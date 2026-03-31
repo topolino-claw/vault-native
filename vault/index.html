@@ -1042,18 +1042,15 @@
         </div>
         <div class="input-group">
             <label>Enter your password</label>
-            <input type="password" id="unlockPassword" placeholder="Password">
+            <input type="password" id="unlockPassword" placeholder="Password" autocomplete="off">
         </div>
         <div class="spacer"></div>
         <div class="button-stack">
             <button class="btn btn-primary" id="btnUnlockVault">
                 Unlock
             </button>
-            <button class="btn btn-ghost" data-screen="restoreSeedScreen">
-                Use seed phrase instead
-            </button>
-            <button class="btn btn-ghost" id="btnDeleteAllDataUnlock" style="color: var(--danger); font-size: 13px;">
-                Delete all data
+            <button class="btn btn-danger" id="btnDeleteAllDataUnlock">
+                Remove All Data
             </button>
         </div>
     </div>
@@ -1272,7 +1269,7 @@
         <button class="btn btn-danger" id="btnLockVault">
             🔒 Lock Vault
         </button>
-        <button class="btn mt-16" id="btnDeleteAllData" style="background: var(--danger); color: white;">
+        <button class="btn btn-danger mt-16" id="btnDeleteAllData">
             🗑️ Delete All Data
         </button>
     </div>

@@ -2936,30 +2936,70 @@ function setupInactivityListeners() {
 // ============================================
 
 /**
- * Attach global keyboard shortcuts active on the password generation screen:
- *   Enter → copyPassword()
- *   Escape → navigate back to main screen
- *
- * Shortcuts are suppressed when focus is inside an input or textarea.
+ * Attach global keyboard shortcuts:
+ *   Enter → submit/advance current screen
+ *   Escape → navigate back (generate screen only)
  */
 function setupKeyboardShortcuts() {
     document.addEventListener('keydown', (e) => {
-        // Only active on generate screen
-        const genScreen = document.getElementById('generateScreen');
-        if (genScreen.classList.contains('hidden')) return;
-
-        // Don't trigger if typing in an input
-        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-
-        // Enter → copy password
         if (e.key === 'Enter') {
-            e.preventDefault();
-            copyPassword();
+            // Don't interfere with textareas
+            if (e.target.tagName === 'TEXTAREA') return;
+
+            const screen = document.querySelector('.screen:not(.hidden)');
+            if (!screen) return;
+
+            switch (screen.id) {
+                case 'unlockScreen':
+                    e.preventDefault();
+                    unlockVault();
+                    break;
+                case 'setMasterPasswordScreen':
+                    e.preventDefault();
+                    if (e.target.id === 'masterPass1') {
+                        document.getElementById('masterPass2').focus();
+                    } else {
+                        setMasterPassword();
+                    }
+                    break;
+                case 'verifySeedScreen':
+                    e.preventDefault();
+                    verifySeedBackup();
+                    break;
+                case 'restoreSeedScreen':
+                    e.preventDefault();
+                    restoreFromSeed();
+                    break;
+                case 'generateScreen':
+                    if (e.target.id === 'genSite') {
+                        e.preventDefault();
+                        document.getElementById('genUser').focus();
+                    } else if (e.target.id === 'genUser') {
+                        e.preventDefault();
+                        saveAndCopy();
+                    } else if (e.target.tagName !== 'INPUT') {
+                        e.preventDefault();
+                        copyPassword();
+                    }
+                    break;
+                case 'advancedScreen':
+                    if (e.target.id === 'hashLengthSetting') {
+                        e.preventDefault();
+                        saveAdvancedSettings();
+                    }
+                    break;
+            }
+            return;
         }
-        // Escape → back to site list
+
+        // Escape → back to site list (generate screen only)
         if (e.key === 'Escape') {
-            e.preventDefault();
-            showScreen('mainScreen');
+            const genScreen = document.getElementById('generateScreen');
+            if (!genScreen.classList.contains('hidden') &&
+                e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+                e.preventDefault();
+                showScreen('mainScreen');
+            }
         }
     });
 }
@@ -3057,58 +3097,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // ── Input event listeners ──
+    // Note: Enter key handling is done globally in setupKeyboardShortcuts()
     const restoreSeedInput = document.getElementById('restoreSeedInput');
     if (restoreSeedInput) {
         restoreSeedInput.addEventListener('input', (e) => onSeedInput(e));
         restoreSeedInput.addEventListener('keydown', (e) => onSeedKeydown(e));
     }
 
-    const unlockPassword = document.getElementById('unlockPassword');
-    if (unlockPassword) {
-        unlockPassword.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') unlockVault();
-        });
-    }
-
     const siteSearch = document.getElementById('siteSearch');
     if (siteSearch) {
         siteSearch.addEventListener('input', () => filterSites());
         siteSearch.addEventListener('keydown', (e) => handleSearchEnter(e));
-    }
-
-    const genSite = document.getElementById('genSite');
-    if (genSite) {
-        genSite.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') document.getElementById('genUser').focus();
-        });
-    }
-
-    const genUser = document.getElementById('genUser');
-    if (genUser) {
-        genUser.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') saveAndCopy();
-        });
-    }
-
-    const masterPass1 = document.getElementById('masterPass1');
-    if (masterPass1) {
-        masterPass1.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') document.getElementById('masterPass2').focus();
-        });
-    }
-
-    const masterPass2 = document.getElementById('masterPass2');
-    if (masterPass2) {
-        masterPass2.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') setMasterPassword();
-        });
-    }
-
-    const hashLengthSetting = document.getElementById('hashLengthSetting');
-    if (hashLengthSetting) {
-        hashLengthSetting.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') saveAdvancedSettings();
-        });
     }
 
     function updateHashLength(delta) {
