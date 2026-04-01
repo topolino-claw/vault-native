@@ -68,9 +68,9 @@ function mergeUsers(remoteUsers) {
 
 const RELAYS = [
     "wss://relay.damus.io",
-    "wss://nostr-pub.wellorder.net",
-    "wss://relay.snort.social",
-    "wss://nos.lol"
+    "wss://nos.lol",
+    "wss://relay.nostr.band",
+    "wss://relay.primal.net"
 ];
 
 // ============================================
@@ -131,6 +131,8 @@ function showScreen(screenId) {
         const hl = vault.settings.hashLength || 16;
         document.getElementById('hashLengthSetting').value = hl;
         document.getElementById('hashLengthDisplay').textContent = hl;
+        const totalEl = document.getElementById('totalPassLenDisplay');
+        if (totalEl) totalEl.textContent = 4 + hl + 4;
         debugMode = vault.settings.debugMode || false;
         document.getElementById('debugModeToggle').checked = debugMode;
     }
@@ -812,6 +814,9 @@ async function restoreFromSeed() {
  * @returns {Promise<void>}
  */
 async function initializeVault(seedPhrase, passphrase = '') {
+    // Remember previous npub to detect account switches
+    const previousNpub = nostrKeys?.npub || null;
+
     if (invoke) {
         // Delegate to Rust backend — secrets stay in mlock'd memory
         const info = await invoke('cmd_initialize_vault', { seedPhrase, passphrase });
@@ -819,23 +824,35 @@ async function initializeVault(seedPhrase, passphrase = '') {
         vault.privateKey = ''; // Don't keep in JS
         vault.passphrase = '';
         nostrKeys = { nsec: '', npub: info.npub, hex: info.npub_hex };
-        vault.users = info.users;
+        vault.users = info.users;   // Now clean — Rust clears data before init
         vault.settings = info.settings;
     } else {
         vault.seedPhrase = seedPhrase.replace(/\s+/g, ' ').trim().toLowerCase();
         vault.privateKey = await derivePrivateKey(vault.seedPhrase);
         nostrKeys = await deriveNostrKeysNIP06(vault.seedPhrase, passphrase);
         vault.passphrase = passphrase;
+        // Clear old data when switching accounts in web mode
+        if (previousNpub && previousNpub !== nostrKeys.npub) {
+            vault.users = {};
+            vault.settings = {};
+        }
     }
+
+    // Only merge local nonce backup if we're restoring the SAME account.
+    // A different npub means a different identity — old local data doesn't apply.
+    const accountChanged = previousNpub && previousNpub !== nostrKeys.npub;
 
     // Attempt to load local nonce backup as a low-priority seed.
     // Nostr data (fetched later in checkForRemoteBackups) will overwrite this.
     try {
         const localBackupRaw = localStorage.getItem('vaultNonceBackup');
-        if (localBackupRaw) {
+        if (localBackupRaw && !accountChanged) {
             debugLog('initializeVault: local nonce backup found, attempting merge');
             let decrypted;
-            if (isWebCryptoEnvelope(localBackupRaw)) {
+            if (invoke) {
+                // Tauri mode: private key stays in Rust, decrypt via Rust command
+                decrypted = await invoke('cmd_decrypt_nonce_backup', { encrypted: localBackupRaw });
+            } else if (isWebCryptoEnvelope(localBackupRaw)) {
                 decrypted = await decryptLocal(localBackupRaw, vault.privateKey);
             } else {
                 // Legacy CryptoJS format — decrypt and migrate
@@ -861,8 +878,8 @@ async function initializeVault(seedPhrase, passphrase = '') {
                     vault.settings = { ...localData.settings, ...vault.settings };
                 }
                 debugLog('initializeVault: local backup merged');
-                // Migrate legacy format to Web Crypto
-                if (!isWebCryptoEnvelope(localBackupRaw)) {
+                // Migrate legacy CryptoJS format to Web Crypto (web-only path)
+                if (!invoke && !isWebCryptoEnvelope(localBackupRaw)) {
                     await saveLocalNonceBackup();
                     debugLog('initializeVault: migrated nonce backup to Web Crypto');
                 }
@@ -924,25 +941,28 @@ async function silentRestoreFromNostr() {
     // Helper: query all relays for backup events authored by a given pubkey
     async function fetchLatestFromRelays(authorPk) {
         let latest = null;
-        for (const url of RELAYS) {
-            try {
-                debugLog(`silentRestoreFromNostr: connecting to ${url}`);
-                const relay = await connectRelay(url);
-                const events = await subscribeAndCollect(relay, [
-                    { kinds: [30078], authors: [authorPk], "#d": [BACKUP_D_TAG], limit: 1 },
-                    { kinds: [1], authors: [authorPk], "#t": ["nostr-pwd-backup"], limit: 1 }
-                ], 6000);
-                relay.close();
-                if (events.length > 0) {
-                    debugLog(`silentRestoreFromNostr: ${url} returned ${events.length} event(s)`);
-                } else {
-                    debugLog(`silentRestoreFromNostr: ${url} returned no events`);
-                }
-                for (const e of events) {
+        const results = await Promise.allSettled(RELAYS.map(async (url) => {
+            debugLog(`silentRestoreFromNostr: connecting to ${url}`);
+            const relay = await connectRelay(url);
+            const events = await subscribeAndCollect(relay, [
+                { kinds: [30078], authors: [authorPk], "#d": [BACKUP_D_TAG], limit: 1 },
+                { kinds: [1], authors: [authorPk], "#t": ["nostr-pwd-backup"], limit: 1 }
+            ], 6000);
+            relay.close();
+            if (events.length > 0) {
+                debugLog(`silentRestoreFromNostr: ${url} returned ${events.length} event(s)`);
+            } else {
+                debugLog(`silentRestoreFromNostr: ${url} returned no events`);
+            }
+            return events;
+        }));
+        for (const r of results) {
+            if (r.status === 'fulfilled') {
+                for (const e of r.value) {
                     if (!latest || e.created_at > latest.created_at) latest = e;
                 }
-            } catch (e) {
-                console.error(`silentRestoreFromNostr: relay error [${url}]`, e);
+            } else {
+                console.error('silentRestoreFromNostr: relay error', r.reason);
             }
         }
         return latest;
@@ -1570,6 +1590,11 @@ async function deleteAllData() {
     localStorage.removeItem('vaultNonceBackup');
     localStorage.removeItem('encryptedDataStorage');
 
+    // Tell Rust backend to wipe secrets + vault data from memory
+    if (invoke) {
+        try { await invoke('cmd_lock_vault'); } catch (_) {}
+    }
+
     _masterPassword = null;
     vault = { privateKey: '', seedPhrase: '', passphrase: '', users: {}, settings: { hashLength: 16 } };
     nostrKeys = { nsec: '', npub: '' };
@@ -1626,6 +1651,14 @@ async function unlockVault() {
             resetInactivityTimer();
             showToast('Vault unlocked!');
             showScreen('mainScreen');
+            // Background sync: merge any newer nonces from Nostr relays
+            silentRestoreFromNostr().then(({ found }) => {
+                if (found) {
+                    setRelayStatus('synced');
+                    autoSaveVault();
+                    renderSiteList();
+                }
+            }).catch(() => {});
             return;
         }
 
@@ -1725,6 +1758,14 @@ async function unlockVault() {
         resetInactivityTimer();
         showToast('Vault unlocked!');
         showScreen('mainScreen');
+        // Background sync: merge any newer nonces from Nostr relays
+        silentRestoreFromNostr().then(({ found }) => {
+            if (found) {
+                setRelayStatus('synced');
+                autoSaveVault();
+                renderSiteList();
+            }
+        }).catch(() => {});
     } catch (e) {
         debugLog('unlockVault error:', e);
         unlockAttempts++;
@@ -2000,17 +2041,15 @@ function subscribeAndCollect(relay, filters, timeoutMs = 8000) {
 // ============================================
 
 const BACKUP_PASSWORD_ITERATIONS = 600000; // OWASP 2023 recommendation for SHA-256
-const BACKUP_ENCRYPTED_VERSION = 2;        // Version marker for double-encrypted backups
 
 /**
  * Derive an AES-256 key from a user password using PBKDF2.
- * Uses the npub as salt (unique per vault, not secret).
  *
- * @param {string} password - User-chosen backup password.
- * @param {string} npubHex  - Hex-encoded Nostr public key (used as salt).
+ * @param {string} password  - User-chosen backup password.
+ * @param {Uint8Array} salt  - Salt bytes for PBKDF2.
  * @returns {Promise<CryptoKey>} AES-256-GCM key.
  */
-async function deriveBackupKey(password, npubHex) {
+async function deriveBackupKey(password, salt) {
     const enc = new TextEncoder();
     const keyMaterial = await crypto.subtle.importKey(
         'raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']
@@ -2018,7 +2057,7 @@ async function deriveBackupKey(password, npubHex) {
     return crypto.subtle.deriveKey(
         {
             name: 'PBKDF2',
-            salt: enc.encode(npubHex),
+            salt,
             iterations: BACKUP_PASSWORD_ITERATIONS,
             hash: 'SHA-256'
         },
@@ -2035,11 +2074,12 @@ async function deriveBackupKey(password, npubHex) {
  *
  * @param {string} plaintext - JSON string of vault data.
  * @param {string} password  - User-chosen backup password.
- * @param {string} npubHex   - Hex Nostr public key (PBKDF2 salt).
- * @returns {Promise<object>} Envelope: { v, iv, ciphertext } (base64-encoded fields).
+ * @param {string} npubHex   - Hex Nostr public key (unused in v3, kept for API compat).
+ * @returns {Promise<object>} Envelope: { v, salt, iv, ciphertext } (base64-encoded fields).
  */
 async function encryptWithBackupPassword(plaintext, password, npubHex) {
-    const key = await deriveBackupKey(password, npubHex);
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const key = await deriveBackupKey(password, salt);
     const iv = crypto.getRandomValues(new Uint8Array(12)); // 96-bit IV for GCM
     const enc = new TextEncoder();
     const ciphertextBuf = await crypto.subtle.encrypt(
@@ -2047,12 +2087,13 @@ async function encryptWithBackupPassword(plaintext, password, npubHex) {
         key,
         enc.encode(plaintext)
     );
-    // Encode IV and ciphertext (includes auth tag) as base64
     const result = {
-        v: BACKUP_ENCRYPTED_VERSION,
+        v: 3,
+        salt: btoa(String.fromCharCode(...salt)),
         iv: btoa(String.fromCharCode(...iv)),
         ciphertext: btoa(String.fromCharCode(...new Uint8Array(ciphertextBuf)))
     };
+    salt.fill(0);
     iv.fill(0);
     return result;
 }
@@ -2067,7 +2108,12 @@ async function encryptWithBackupPassword(plaintext, password, npubHex) {
  * @throws {DOMException} If password is incorrect (auth tag mismatch).
  */
 async function decryptWithBackupPassword(envelope, password, npubHex) {
-    const key = await deriveBackupKey(password, npubHex);
+    // v3: random salt from envelope; v2: npubHex as salt
+    const enc = new TextEncoder();
+    const salt = (envelope.v === 3 && envelope.salt)
+        ? Uint8Array.from(atob(envelope.salt), c => c.charCodeAt(0))
+        : enc.encode(npubHex);
+    const key = await deriveBackupKey(password, salt);
     const iv = Uint8Array.from(atob(envelope.iv), c => c.charCodeAt(0));
     const ciphertext = Uint8Array.from(atob(envelope.ciphertext), c => c.charCodeAt(0));
     const plaintextBuf = await crypto.subtle.decrypt(
@@ -2081,15 +2127,15 @@ async function decryptWithBackupPassword(envelope, password, npubHex) {
 }
 
 /**
- * Check if a decrypted NIP-44 payload is a double-encrypted (v2) envelope.
+ * Check if a decrypted NIP-44 payload is a double-encrypted envelope (v2 or v3).
  *
  * @param {string} decryptedContent - The NIP-44 decrypted string.
- * @returns {object|null} Parsed envelope if v2, null otherwise.
+ * @returns {object|null} Parsed envelope if double-encrypted, null otherwise.
  */
 function parseDoubleEncryptedEnvelope(decryptedContent) {
     try {
         const parsed = JSON.parse(decryptedContent);
-        if (parsed && parsed.v === BACKUP_ENCRYPTED_VERSION && parsed.iv && parsed.ciphertext) {
+        if (parsed && (parsed.v === 2 || parsed.v === 3) && parsed.iv && parsed.ciphertext) {
             return parsed;
         }
     } catch (_) {}
@@ -2309,7 +2355,7 @@ async function backupToNostr(silent = false) {
         const vaultData = JSON.stringify({ users: vault.users, settings: vault.settings });
 
         if (invoke) {
-            // Tauri mode: encrypt with JS NIP-44 (for cross-implementation compat), sign in Rust
+            // Tauri mode: NIP-44 encrypt + schnorr sign in Rust (secrets never leave Rust)
             const pk = await invoke('cmd_get_nostr_pubkey');
             const encrypted = await invoke('cmd_nip44_self_encrypt', { plaintext: vaultData });
             const unsignedEvent = {
@@ -2356,9 +2402,10 @@ async function backupToNostr(silent = false) {
         let successRelays = [];
         const results = await Promise.allSettled(RELAYS.map(async (url) => {
             const relay = await connectRelay(url);
+            // nostr-tools v1.15.0: relay.publish() is async (returns Promise)
             await Promise.race([
                 relay.publish(event),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000))
+                new Promise((_, reject) => setTimeout(() => reject(new Error('publish timeout')), 5000))
             ]);
             relay.close();
             return url;
@@ -3072,6 +3119,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         let val = Math.min(64, Math.max(8, (parseInt(input.value) || 16) + delta));
         input.value = val;
         display.textContent = val;
+        const totalEl = document.getElementById('totalPassLenDisplay');
+        if (totalEl) totalEl.textContent = 4 + val + 4;
     }
     document.getElementById('btnDecrementHash')?.addEventListener('click', () => updateHashLength(-1));
     document.getElementById('btnIncrementHash')?.addEventListener('click', () => updateHashLength(1));

@@ -32,6 +32,9 @@ pub fn cmd_initialize_vault(
     let (secrets, nostr_keys, legacy_nostr_keys) =
         crypto::initialize_vault_secrets(&seed_phrase, &passphrase)?;
 
+    // Clear stale vault data from any previously loaded account
+    *vault.data.lock() = crate::state::VaultData::default();
+
     *vault.secrets.lock() = Some(secrets);
     *vault.nostr_keys.lock() = Some(nostr_keys);
     *vault.legacy_nostr_keys.lock() = Some(legacy_nostr_keys);

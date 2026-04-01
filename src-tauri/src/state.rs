@@ -177,3 +177,267 @@ impl AppVault {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── AppVault::new defaults ─────────────────────────────────────────
+
+    #[test]
+    fn test_app_vault_new_is_locked() {
+        let vault = AppVault::new();
+        assert!(!vault.is_unlocked());
+    }
+
+    #[test]
+    fn test_app_vault_new_no_master_password() {
+        let vault = AppVault::new();
+        assert!(vault.master_password.lock().is_none());
+    }
+
+    #[test]
+    fn test_app_vault_new_no_keys() {
+        let vault = AppVault::new();
+        assert!(vault.nostr_keys.lock().is_none());
+        assert!(vault.legacy_nostr_keys.lock().is_none());
+        assert!(vault.secrets.lock().is_none());
+    }
+
+    #[test]
+    fn test_app_vault_new_empty_data() {
+        let vault = AppVault::new();
+        let data = vault.data.lock();
+        assert!(data.users.is_empty());
+        assert_eq!(data.settings.hash_length, 16);
+        assert!(!data.settings.debug_mode);
+        assert!(!data.settings.last_backup_failed);
+    }
+
+    // ── AppVault unlock/lock lifecycle ─────────────────────────────────
+
+    fn setup_unlocked_vault() -> AppVault {
+        let vault = AppVault::new();
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let (secrets, nostr_keys, legacy_keys) =
+            crate::crypto::initialize_vault_secrets(mnemonic, "").unwrap();
+        *vault.secrets.lock() = Some(secrets);
+        *vault.nostr_keys.lock() = Some(nostr_keys);
+        *vault.legacy_nostr_keys.lock() = Some(LegacyNostrKeyPair {
+            sk_hex: legacy_keys.sk_hex.clone(),
+            pk_hex: legacy_keys.pk_hex.clone(),
+        });
+        *vault.master_password.lock() = Some(SecretString::from("test_password".to_string()));
+        {
+            let mut data = vault.data.lock();
+            data.users.insert(
+                "alice".to_string(),
+                [("github.com".to_string(), 3u64)].into_iter().collect(),
+            );
+        }
+        vault
+    }
+
+    #[test]
+    fn test_app_vault_is_unlocked_after_setup() {
+        let vault = setup_unlocked_vault();
+        assert!(vault.is_unlocked());
+    }
+
+    #[test]
+    fn test_app_vault_lock_clears_secrets() {
+        let vault = setup_unlocked_vault();
+        assert!(vault.is_unlocked());
+
+        vault.lock();
+
+        assert!(!vault.is_unlocked());
+        assert!(vault.secrets.lock().is_none());
+        assert!(vault.nostr_keys.lock().is_none());
+        assert!(vault.legacy_nostr_keys.lock().is_none());
+        assert!(vault.master_password.lock().is_none());
+    }
+
+    #[test]
+    fn test_app_vault_lock_clears_data() {
+        let vault = setup_unlocked_vault();
+        assert!(!vault.data.lock().users.is_empty());
+
+        vault.lock();
+
+        assert!(vault.data.lock().users.is_empty());
+    }
+
+    #[test]
+    fn test_app_vault_double_lock_is_safe() {
+        let vault = setup_unlocked_vault();
+        vault.lock();
+        vault.lock(); // should not panic
+        assert!(!vault.is_unlocked());
+    }
+
+    // ── AppVault::public_info ──────────────────────────────────────────
+
+    #[test]
+    fn test_public_info_none_when_locked() {
+        let vault = AppVault::new();
+        assert!(vault.public_info().is_none());
+    }
+
+    #[test]
+    fn test_public_info_some_when_unlocked() {
+        let vault = setup_unlocked_vault();
+        let info = vault.public_info();
+        assert!(info.is_some());
+
+        let info = info.unwrap();
+        assert!(info.npub.starts_with("npub1"));
+        assert_eq!(info.npub_hex.len(), 64);
+        assert!(info.has_seed);
+        assert!(info.has_password);
+        assert!(info.users.contains_key("alice"));
+        assert_eq!(info.users["alice"]["github.com"], 3);
+    }
+
+    #[test]
+    fn test_public_info_has_password_false_without_master() {
+        let vault = setup_unlocked_vault();
+        *vault.master_password.lock() = None;
+        let info = vault.public_info().unwrap();
+        assert!(!info.has_password);
+    }
+
+    #[test]
+    fn test_public_info_none_after_lock() {
+        let vault = setup_unlocked_vault();
+        assert!(vault.public_info().is_some());
+        vault.lock();
+        assert!(vault.public_info().is_none());
+    }
+
+    // ── VaultSettings defaults and serialization ───────────────────────
+
+    #[test]
+    fn test_vault_settings_default() {
+        let settings = VaultSettings::default();
+        assert_eq!(settings.hash_length, 16);
+        assert!(!settings.debug_mode);
+        assert!(!settings.last_backup_failed);
+    }
+
+    #[test]
+    fn test_vault_settings_serialization_roundtrip() {
+        let settings = VaultSettings {
+            hash_length: 32,
+            debug_mode: true,
+            last_backup_failed: true,
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let parsed: VaultSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.hash_length, 32);
+        assert!(parsed.debug_mode);
+        assert!(parsed.last_backup_failed);
+    }
+
+    #[test]
+    fn test_vault_settings_deserialization_camel_case() {
+        // Frontend sends camelCase keys
+        let json = r#"{"hashLength":24,"debugMode":false,"lastBackupFailed":true}"#;
+        let settings: VaultSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.hash_length, 24);
+        assert!(!settings.debug_mode);
+        assert!(settings.last_backup_failed);
+    }
+
+    #[test]
+    fn test_vault_settings_deserialization_missing_fields() {
+        // Should use defaults for missing fields
+        let json = r#"{}"#;
+        let settings: VaultSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(settings.hash_length, 16);
+        assert!(!settings.debug_mode);
+        assert!(!settings.last_backup_failed);
+    }
+
+    // ── VaultData defaults ─────────────────────────────────────────────
+
+    #[test]
+    fn test_vault_data_default() {
+        let data = VaultData::default();
+        assert!(data.users.is_empty());
+        assert_eq!(data.settings.hash_length, 16);
+    }
+
+    #[test]
+    fn test_vault_data_serialization_roundtrip() {
+        let mut data = VaultData::default();
+        data.users.insert(
+            "user@test.com".to_string(),
+            [("site.com".to_string(), 5u64)].into_iter().collect(),
+        );
+        data.settings.hash_length = 24;
+
+        let json = serde_json::to_string(&data).unwrap();
+        let parsed: VaultData = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.users["user@test.com"]["site.com"], 5);
+        assert_eq!(parsed.settings.hash_length, 24);
+    }
+
+    // ── VaultPublicInfo serialization ──────────────────────────────────
+
+    #[test]
+    fn test_vault_public_info_serializes_to_json() {
+        let info = VaultPublicInfo {
+            npub: "npub1test".to_string(),
+            npub_hex: "abcd".repeat(16),
+            has_seed: true,
+            has_password: false,
+            users: HashMap::new(),
+            settings: VaultSettings::default(),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["npub"], "npub1test");
+        assert_eq!(parsed["has_seed"], true);
+        assert_eq!(parsed["has_password"], false);
+    }
+
+    // ── Thread safety smoke test ───────────────────────────────────────
+
+    #[test]
+    fn test_app_vault_concurrent_access() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let vault = Arc::new(setup_unlocked_vault());
+        let mut handles = vec![];
+
+        // Spawn readers
+        for _ in 0..4 {
+            let v = Arc::clone(&vault);
+            handles.push(thread::spawn(move || {
+                assert!(v.is_unlocked());
+                let _info = v.public_info();
+            }));
+        }
+
+        // Spawn a writer
+        {
+            let v = Arc::clone(&vault);
+            handles.push(thread::spawn(move || {
+                let mut data = v.data.lock();
+                data.users.insert(
+                    "bob".to_string(),
+                    [("test.com".to_string(), 1u64)].into_iter().collect(),
+                );
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Verify writer's change persisted
+        assert!(vault.data.lock().users.contains_key("bob"));
+    }
+}

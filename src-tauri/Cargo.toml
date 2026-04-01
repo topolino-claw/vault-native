@@ -29,11 +29,15 @@ hex = "0.4"
 # BIP39 mnemonic generation/validation
 bip39 = { version = "2", features = ["zeroize"] }
 
-# secp256k1 EC operations (BIP32, Nostr key derivation)
-k256 = { version = "0.13", features = ["arithmetic", "schnorr"] }
+# secp256k1 EC operations (BIP32, Nostr key derivation, ECDH)
+k256 = { version = "0.13", features = ["arithmetic", "schnorr", "ecdh"] }
 
 # Nostr protocol (NIP-44, NIP-04, event signing, nip19 encoding)
 nostr = { version = "0.37", features = ["nip44", "nip04"] }
+
+# NIP-44 v1 decryption (XChaCha20 stream cipher, nostr-tools v1.15.0 format)
+chacha20 = "0.9"
+base64 = "0.22"
 
 # Memory security
 zeroize = { version = "1", features = ["derive"] }

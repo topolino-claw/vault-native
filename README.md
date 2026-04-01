@@ -169,6 +169,51 @@ cargo tauri ios dev
 
 ---
 
+## Testing
+
+The project has two test suites: **JavaScript** (frontend logic) and **Rust** (backend/crypto).
+
+### Run everything
+
+```bash
+npm run test:all
+```
+
+### JavaScript tests (frontend)
+
+```bash
+npm test                  # Run all JS suites
+```
+
+Individual suites:
+
+| Command | Suite |
+|---------|-------|
+| `npm run test:merge` | Deep merge algorithm |
+| `npm run test:bip39` | BIP39 key derivation |
+| `npm run test:password` | Password generation |
+| `npm run test:crypto` | Local encryption (AES-256-GCM) |
+| `npm run test:lifecycle` | Vault init/save/load flows |
+| `npm run test:nostr` | Nostr relay sync |
+| `npm run test:ui` | UI navigation & interactions |
+| `npm run test:security` | Security hardening checks |
+| `npm run test:import` | JSON import/export |
+| `npm run test:e2e` | End-to-end multi-device sync |
+| `npm run test:relay` | Real relay integration (requires network) |
+
+### Rust tests (backend)
+
+```bash
+npm run test:rust         # Or: cd src-tauri && cargo test
+```
+
+Covers:
+- **crypto.rs** -- BIP39 mnemonic generation/validation, BIP32 key derivation, NIP-06, AES-256-GCM encrypt/decrypt, PBKDF2, password generation, base64, bech32/npub encoding, backup password encryption
+- **nostr_ops.rs** -- Nostr event signing (schnorr), NIP-44 v1/v2 encrypt/decrypt, NIP-04 decrypt, event ID computation
+- **state.rs** -- Vault lifecycle (lock/unlock), secret clearing, thread safety, settings serialization
+
+---
+
 ## Project Structure
 
 ```

@@ -73,7 +73,7 @@
             overflow: hidden;
         }
 
-        @media (min-width: 540px) {
+        @media (min-width: 460px) {
             body {
                 padding: 60px 24px;
                 align-items: center;
@@ -338,6 +338,15 @@
 
         .btn-secondary:hover, .btn-secondary:active {
             background: #234e60;
+        }
+
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+
+        .btn-success:hover, .btn-success:active {
+            background: #059669;
         }
 
         .btn-ghost {
@@ -1022,7 +1031,7 @@
         <div class="spacer"></div>
 
         <div class="button-stack">
-            <button class="btn" data-screen="newWalletScreen" style="background: #10b981; color: white;">
+            <button class="btn btn-success" data-screen="newWalletScreen">
                 Create New Vault
             </button>
             <button class="btn btn-primary" data-screen="restoreSeedScreen">
@@ -1175,7 +1184,7 @@
             <button class="btn btn-primary" id="btnSetMasterPassword">
                 Set Password
             </button>
-            <button class="btn" id="btnSkipMasterPassword" style="background: var(--danger); color: white;">
+            <button class="btn btn-danger" id="btnSkipMasterPassword">
                 Skip for now
             </button>
             <p class="text-muted text-sm text-center" style="margin-top: 4px;">
@@ -1342,7 +1351,8 @@
                 <span class="stepper-value" id="hashLengthDisplay">16</span>
                 <button id="btnIncrementHash">+</button>
             </div>
-            <p class="text-muted text-sm mt-8">Changing this will generate different passwords.</p>
+            <p class="text-muted text-sm mt-8">Total password length: <strong id="totalPassLenDisplay">24</strong> characters</p>
+            <p class="text-muted text-sm">Changing this will generate different passwords.</p>
         </div>
         <div class="settings-item">
             <div>

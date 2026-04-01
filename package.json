@@ -2,9 +2,23 @@
   "name": "vault-native",
   "private": true,
   "scripts": {
-    "test": "node tests/deep-merge.test.js"
+    "test": "node tests/run-all.js",
+    "test:merge": "node tests/deep-merge.test.js",
+    "test:bip39": "node tests/bip39.test.js",
+    "test:password": "node tests/password-gen.test.js",
+    "test:crypto": "node tests/local-crypto.test.js",
+    "test:lifecycle": "node tests/vault-lifecycle.test.js",
+    "test:nostr": "node tests/nostr-sync.test.js",
+    "test:ui": "node tests/ui-flows.test.js",
+    "test:security": "node tests/security.test.js",
+    "test:import": "node tests/import-export.test.js",
+    "test:e2e": "node tests/e2e-sync-scenarios.test.js",
+    "test:relay": "node tests/relay-integration.test.js",
+    "test:rust": "cd src-tauri && cargo test",
+    "test:all": "npm test && cd src-tauri && cargo test"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.10.1"
+    "@tauri-apps/cli": "^2.10.1",
+    "ws": "^8.20.0"
   }
 }

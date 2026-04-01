@@ -925,6 +925,27 @@ mod tests {
     }
 
     #[test]
+    fn test_nip44_decrypt_realistic_vault_payload() {
+        // Verify NIP-44 self-encrypt/decrypt with a realistic vault payload
+        // containing multiple users, sites, nonces, and settings.
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let keys = derive_nostr_keys_nip06(mnemonic, "").unwrap();
+
+        let payload = r#"{"users":{"alice@gmail.com":{"github.com":3,"google.com":0,"bank.example.com":12},"bob@work.com":{"slack.com":1}},"settings":{"hashLength":16,"debugMode":false,"lastBackupFailed":false}}"#;
+        let encrypted = crate::nostr_ops::nip44_encrypt(payload, &keys.sk_hex, &keys.pk_hex).unwrap();
+
+        // Decrypt should yield exact same JSON
+        let decrypted = crate::nostr_ops::nip44_decrypt(&encrypted, &keys.sk_hex, &keys.pk_hex).unwrap();
+        assert_eq!(payload, decrypted);
+
+        // Parsed nonces should be correct
+        let parsed: serde_json::Value = serde_json::from_str(&decrypted).unwrap();
+        assert_eq!(parsed["users"]["alice@gmail.com"]["github.com"], 3);
+        assert_eq!(parsed["users"]["alice@gmail.com"]["bank.example.com"], 12);
+        assert_eq!(parsed["users"]["bob@work.com"]["slack.com"], 1);
+    }
+
+    #[test]
     fn test_base64_round_trip() {
         // Verify base64 encode/decode matches JS btoa/atob behavior
         let test_data: &[u8] = &[0, 1, 2, 255, 128, 64, 32, 16, 8, 4, 2, 1];
@@ -939,5 +960,396 @@ mod tests {
             let dec = base64_decode(&enc).unwrap();
             assert_eq!(data, dec, "Failed for length {}", len);
         }
+    }
+
+    // ── verify_seed_phrase edge cases ──────────────────────────────────
+
+    #[test]
+    fn test_verify_seed_phrase_valid_12_words() {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        assert!(verify_seed_phrase(phrase));
+    }
+
+    #[test]
+    fn test_verify_seed_phrase_case_insensitive() {
+        let phrase = "Abandon ABANDON abandon Abandon abandon abandon abandon abandon abandon abandon abandon About";
+        assert!(verify_seed_phrase(phrase));
+    }
+
+    #[test]
+    fn test_verify_seed_phrase_invalid_word_count() {
+        // 11 words — not a valid BIP39 length
+        assert!(!verify_seed_phrase("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon"));
+        // 13 words — not valid either
+        assert!(!verify_seed_phrase("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about zoo"));
+        // empty
+        assert!(!verify_seed_phrase(""));
+        // single word
+        assert!(!verify_seed_phrase("abandon"));
+    }
+
+    #[test]
+    fn test_verify_seed_phrase_unknown_words() {
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon xyzzy";
+        assert!(!verify_seed_phrase(phrase));
+    }
+
+    #[test]
+    fn test_verify_seed_phrase_bad_checksum() {
+        // Valid words but wrong checksum (last word changed from "about" to "abandon")
+        let phrase = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon";
+        assert!(!verify_seed_phrase(phrase));
+    }
+
+    #[test]
+    fn test_verify_seed_phrase_extra_whitespace() {
+        let phrase = "  abandon  abandon  abandon  abandon  abandon  abandon  abandon  abandon  abandon  abandon  abandon  about  ";
+        assert!(verify_seed_phrase(phrase));
+    }
+
+    #[test]
+    fn test_generate_mnemonic_always_valid() {
+        // Generate 5 mnemonics and verify all pass checksum
+        for _ in 0..5 {
+            let mnemonic = generate_mnemonic().unwrap();
+            assert!(verify_seed_phrase(&mnemonic), "Generated mnemonic failed verification: {}", mnemonic);
+        }
+    }
+
+    // ── derive_nostr_keys_legacy tests ─────────────────────────────────
+
+    #[test]
+    fn test_derive_nostr_keys_legacy_deterministic() {
+        let keys1 = derive_nostr_keys_legacy("abc123").unwrap();
+        let keys2 = derive_nostr_keys_legacy("abc123").unwrap();
+        assert_eq!(keys1.sk_hex, keys2.sk_hex);
+        assert_eq!(keys1.pk_hex, keys2.pk_hex);
+    }
+
+    #[test]
+    fn test_derive_nostr_keys_legacy_sk_is_sha256() {
+        let input = "test_private_key";
+        let keys = derive_nostr_keys_legacy(input).unwrap();
+        let expected_sk = sha256_hex(input);
+        assert_eq!(keys.sk_hex, expected_sk);
+    }
+
+    #[test]
+    fn test_derive_nostr_keys_legacy_different_inputs() {
+        let keys1 = derive_nostr_keys_legacy("key_a").unwrap();
+        let keys2 = derive_nostr_keys_legacy("key_b").unwrap();
+        assert_ne!(keys1.sk_hex, keys2.sk_hex);
+        assert_ne!(keys1.pk_hex, keys2.pk_hex);
+    }
+
+    #[test]
+    fn test_derive_nostr_keys_legacy_pk_is_32_bytes() {
+        let keys = derive_nostr_keys_legacy("any_key").unwrap();
+        assert_eq!(keys.pk_hex.len(), 64, "Public key should be 64 hex chars (32 bytes)");
+        assert_eq!(keys.sk_hex.len(), 64, "Secret key should be 64 hex chars (32 bytes)");
+    }
+
+    // ── sha256_hex known vectors ───────────────────────────────────────
+
+    #[test]
+    fn test_sha256_hex_empty_string() {
+        // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        assert_eq!(
+            sha256_hex(""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    #[test]
+    fn test_sha256_hex_hello() {
+        // SHA-256("hello") known value
+        assert_eq!(
+            sha256_hex("hello"),
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[test]
+    fn test_sha256_hex_deterministic() {
+        let h1 = sha256_hex("test input");
+        let h2 = sha256_hex("test input");
+        assert_eq!(h1, h2);
+        assert_eq!(h1.len(), 64);
+    }
+
+    // ── decimal_to_hex edge cases ──────────────────────────────────────
+
+    #[test]
+    fn test_decimal_to_hex_zero() {
+        assert_eq!(decimal_to_hex("0").unwrap(), "0");
+    }
+
+    #[test]
+    fn test_decimal_to_hex_small_values() {
+        assert_eq!(decimal_to_hex("1").unwrap(), "1");
+        assert_eq!(decimal_to_hex("10").unwrap(), "a");
+        assert_eq!(decimal_to_hex("15").unwrap(), "f");
+        assert_eq!(decimal_to_hex("16").unwrap(), "10");
+        assert_eq!(decimal_to_hex("255").unwrap(), "ff");
+        assert_eq!(decimal_to_hex("256").unwrap(), "100");
+    }
+
+    #[test]
+    fn test_decimal_to_hex_large_value() {
+        // 1000000 = 0xF4240
+        assert_eq!(decimal_to_hex("1000000").unwrap(), "f4240");
+    }
+
+    #[test]
+    fn test_decimal_to_hex_leading_zeros() {
+        // Leading zeros should be stripped before conversion
+        // "003" stripped to "3" → hex "3"
+        let result = decimal_to_hex("003");
+        assert_eq!(result.unwrap(), "3");
+    }
+
+    // ── generate_password parameter sensitivity ────────────────────────
+
+    #[test]
+    fn test_generate_password_format() {
+        let pass = generate_password("key", "user", "site", 0, 16);
+        assert!(pass.starts_with("PASS"), "Password must start with PASS");
+        assert!(pass.ends_with("249+"), "Password must end with 249+");
+        // Total length: "PASS" (4) + hash_length (16) + "249+" (4) = 24
+        assert_eq!(pass.len(), 24);
+    }
+
+    #[test]
+    fn test_generate_password_deterministic() {
+        let pass1 = generate_password("key", "user", "site", 0, 16);
+        let pass2 = generate_password("key", "user", "site", 0, 16);
+        assert_eq!(pass1, pass2);
+    }
+
+    #[test]
+    fn test_generate_password_different_key() {
+        let a = generate_password("key_a", "user", "site", 0, 16);
+        let b = generate_password("key_b", "user", "site", 0, 16);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_generate_password_different_user() {
+        let a = generate_password("key", "alice", "site", 0, 16);
+        let b = generate_password("key", "bob", "site", 0, 16);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_generate_password_different_site() {
+        let a = generate_password("key", "user", "github.com", 0, 16);
+        let b = generate_password("key", "user", "google.com", 0, 16);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_generate_password_different_nonce() {
+        let a = generate_password("key", "user", "site", 0, 16);
+        let b = generate_password("key", "user", "site", 1, 16);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn test_generate_password_hash_length_respected() {
+        let short = generate_password("key", "user", "site", 0, 8);
+        let long = generate_password("key", "user", "site", 0, 32);
+        // "PASS" + 8 + "249+" = 16
+        assert_eq!(short.len(), 16);
+        // "PASS" + 32 + "249+" = 40
+        assert_eq!(long.len(), 40);
+    }
+
+    #[test]
+    fn test_generate_password_hex_portion_is_valid_hex() {
+        let pass = generate_password("key", "user", "site", 0, 16);
+        let hex_part = &pass[4..20]; // between PASS and 249+
+        assert!(hex_part.chars().all(|c| c.is_ascii_hexdigit()), "Hex portion must be valid hex: {}", hex_part);
+        // SHA-256 hex is lowercase
+        assert!(hex_part.chars().all(|c| !c.is_ascii_uppercase()), "Hex portion must be lowercase");
+    }
+
+    // ── Large payload encrypt/decrypt ──────────────────────────────────
+
+    #[test]
+    fn test_encrypt_decrypt_large_payload() {
+        // Simulate a large vault with many users/sites
+        let mut users = serde_json::Map::new();
+        for i in 0..100 {
+            let mut sites = serde_json::Map::new();
+            for j in 0..50 {
+                sites.insert(format!("site{}.com", j), serde_json::Value::from(j as u64));
+            }
+            users.insert(format!("user{}@test.com", i), serde_json::Value::Object(sites));
+        }
+        let payload = serde_json::to_string(&users).unwrap();
+        assert!(payload.len() > 50_000, "Payload should be large");
+
+        let encrypted = encrypt_local(&payload, "strong_password_123").unwrap();
+        let decrypted = decrypt_local(&encrypted, "strong_password_123").unwrap();
+        assert_eq!(payload, decrypted);
+    }
+
+    // ── base64 invalid input handling ──────────────────────────────────
+
+    #[test]
+    fn test_base64_decode_empty() {
+        let result = base64_decode("").unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_base64_encode_empty() {
+        assert_eq!(base64_encode(&[]), "");
+    }
+
+    #[test]
+    fn test_base64_known_values() {
+        // "hello" → "aGVsbG8="
+        assert_eq!(base64_encode(b"hello"), "aGVsbG8=");
+        assert_eq!(base64_decode("aGVsbG8=").unwrap(), b"hello");
+    }
+
+    // ── bech32/npub edge cases ─────────────────────────────────────────
+
+    #[test]
+    fn test_hex_to_npub_deterministic() {
+        let pk = "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234f9d834e34";
+        let npub1 = hex_to_npub(pk).unwrap();
+        let npub2 = hex_to_npub(pk).unwrap();
+        assert_eq!(npub1, npub2);
+        assert!(npub1.starts_with("npub1"));
+        // npub is always 63 characters
+        assert_eq!(npub1.len(), 63);
+    }
+
+    #[test]
+    fn test_hex_to_npub_different_keys() {
+        let npub1 = hex_to_npub("7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234f9d834e34").unwrap();
+        let npub2 = hex_to_npub("5f29af3b9676180290e77a4efad265c4c2ff28a5302461f73597fda26bb25731").unwrap();
+        assert_ne!(npub1, npub2);
+    }
+
+    #[test]
+    fn test_hex_to_npub_invalid_hex() {
+        assert!(hex_to_npub("not_valid_hex_zz").is_err());
+    }
+
+    // ── NIP-06 derivation with passphrase ──────────────────────────────
+
+    #[test]
+    fn test_nip06_with_passphrase() {
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let keys_no_pass = derive_nostr_keys_nip06(mnemonic, "").unwrap();
+        let keys_with_pass = derive_nostr_keys_nip06(mnemonic, "my_passphrase").unwrap();
+        // Different passphrase → different keys
+        assert_ne!(keys_no_pass.sk_hex, keys_with_pass.sk_hex);
+        assert_ne!(keys_no_pass.pk_hex, keys_with_pass.pk_hex);
+        assert!(keys_with_pass.is_nip06);
+    }
+
+    #[test]
+    fn test_nip06_passphrase_deterministic() {
+        let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let k1 = derive_nostr_keys_nip06(mnemonic, "pass").unwrap();
+        let k2 = derive_nostr_keys_nip06(mnemonic, "pass").unwrap();
+        assert_eq!(k1.sk_hex, k2.sk_hex);
+        assert_eq!(k1.pk_hex, k2.pk_hex);
+    }
+
+    // ── initialize_vault_secrets tests ─────────────────────────────────
+
+    #[test]
+    fn test_initialize_vault_secrets_normalization() {
+        // Upper/mixed case should be normalized to lowercase
+        let mnemonic_upper = "ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABANDON ABOUT";
+        let mnemonic_lower = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        let (s1, n1, l1) = initialize_vault_secrets(mnemonic_upper, "").unwrap();
+        let (s2, n2, l2) = initialize_vault_secrets(mnemonic_lower, "").unwrap();
+        assert_eq!(s1.private_key, s2.private_key);
+        assert_eq!(s1.seed_phrase, s2.seed_phrase);
+        assert_eq!(n1.sk_hex, n2.sk_hex);
+        assert_eq!(l1.sk_hex, l2.sk_hex);
+    }
+
+    // ── encrypt_local version format ───────────────────────────────────
+
+    #[test]
+    fn test_encrypt_local_produces_v3() {
+        let enc = encrypt_local("data", "password12345").unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&enc).unwrap();
+        assert_eq!(parsed["v"], 3);
+    }
+
+    #[test]
+    fn test_decrypt_local_rejects_wrong_version() {
+        let fake = serde_json::json!({
+            "v": 99,
+            "salt": base64_encode(&[0u8; 16]),
+            "iv": base64_encode(&[0u8; 12]),
+            "ciphertext": base64_encode(b"fake"),
+        });
+        let result = decrypt_local(&serde_json::to_string(&fake).unwrap(), "password");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unknown encryption version"));
+    }
+
+    #[test]
+    fn test_decrypt_local_rejects_invalid_json() {
+        assert!(decrypt_local("not json at all", "password").is_err());
+    }
+
+    // ── Encrypt uniqueness (salt/IV randomness) ────────────────────────
+
+    #[test]
+    fn test_encrypt_local_unique_ciphertexts() {
+        let enc1 = encrypt_local("same data", "same_password").unwrap();
+        let enc2 = encrypt_local("same data", "same_password").unwrap();
+        // Same plaintext + password should produce different ciphertexts (random salt/IV)
+        assert_ne!(enc1, enc2);
+    }
+
+    // ── PBKDF2 iterations constant ─────────────────────────────────────
+
+    #[test]
+    fn test_pbkdf2_iterations_owasp_minimum() {
+        // OWASP 2023 recommends >= 600,000 for PBKDF2-SHA256
+        assert!(PBKDF2_ITERATIONS >= 600_000);
+    }
+
+    // ── Wordlist integrity ─────────────────────────────────────────────
+
+    #[test]
+    fn test_wordlist_has_2048_words() {
+        let wordlist = get_wordlist();
+        assert_eq!(wordlist.len(), 2048, "BIP39 wordlist must have exactly 2048 words");
+    }
+
+    #[test]
+    fn test_wordlist_all_lowercase() {
+        let wordlist = get_wordlist();
+        for word in &wordlist {
+            assert_eq!(*word, word.to_lowercase(), "Word '{}' is not lowercase", word);
+        }
+    }
+
+    #[test]
+    fn test_wordlist_no_duplicates() {
+        let wordlist = get_wordlist();
+        let mut sorted = wordlist.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), 2048, "Wordlist contains duplicate words");
+    }
+
+    #[test]
+    fn test_wordlist_first_and_last() {
+        let wordlist = get_wordlist();
+        assert_eq!(wordlist[0], "abandon");
+        assert_eq!(wordlist[2047], "zoo");
     }
 }
