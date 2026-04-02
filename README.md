@@ -1,4 +1,4 @@
-# Vault Native Stable
+# Vault Native Stable/b
 
 Cross-platform native app wrapping [Vault Web](https://github.com/topolino-claw/PasswordManagerWeb) via Tauri 2.
 
