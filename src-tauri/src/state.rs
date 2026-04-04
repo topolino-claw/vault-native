@@ -97,12 +97,29 @@ pub struct VaultPublicInfo {
 }
 
 /// Thread-safe vault state managed by Tauri.
+/// Cached PBKDF2-derived key + salt to avoid re-deriving on every save.
+/// Invalidated when the master password changes.
+pub struct CachedLocalKey {
+    pub key: [u8; 32],
+    pub salt: [u8; 16],
+}
+
+impl Drop for CachedLocalKey {
+    fn drop(&mut self) {
+        self.key.zeroize();
+        self.salt.zeroize();
+    }
+}
+
 pub struct AppVault {
     pub secrets: Mutex<Option<VaultSecrets>>,
     pub nostr_keys: Mutex<Option<NostrKeyPair>>,
     pub legacy_nostr_keys: Mutex<Option<LegacyNostrKeyPair>>,
     pub data: Mutex<VaultData>,
     pub master_password: Mutex<Option<SecretString>>,
+    pub cached_local_key: Mutex<Option<CachedLocalKey>>,
+    /// Cached PBKDF2 key for nonce backup encryption (uses private_key as passphrase).
+    pub cached_nonce_key: Mutex<Option<CachedLocalKey>>,
 }
 
 impl AppVault {
@@ -113,6 +130,8 @@ impl AppVault {
             legacy_nostr_keys: Mutex::new(None),
             data: Mutex::new(VaultData::default()),
             master_password: Mutex::new(None),
+            cached_local_key: Mutex::new(None),
+            cached_nonce_key: Mutex::new(None),
         }
     }
 
@@ -149,6 +168,8 @@ impl AppVault {
         *self.nostr_keys.lock() = None;
         *self.legacy_nostr_keys.lock() = None;
         *self.master_password.lock() = None;
+        *self.cached_local_key.lock() = None;
+        *self.cached_nonce_key.lock() = None;
         // Non-secret data is kept for potential re-lock scenarios,
         // but cleared for safety
         *self.data.lock() = VaultData::default();

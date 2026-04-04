@@ -1,6 +1,6 @@
 {
   "productName": "Vault",
-  "version": "1.0.0",
+  "version": "4.0.0",
   "identifier": "com.topolino.vault",
   "build": {
     "frontendDist": "../vault",
@@ -9,7 +9,7 @@
   },
   "app": {
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' wss://relay.damus.io wss://nostr-pub.wellorder.net wss://relay.snort.social wss://nos.lol; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+      "csp": "default-src 'self'; connect-src 'self' wss://relay.damus.io wss://nostr-pub.wellorder.net wss://relay.snort.social wss://nos.lol wss://relay.nostr.band wss://relay.primal.net; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
     },
     "windows": [
       {

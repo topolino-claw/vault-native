@@ -74,6 +74,7 @@ pub fn cmd_set_master_password(
         return Err("Password must be at least 8 characters".to_string());
     }
     *vault.master_password.lock() = Some(SecretString::from(password));
+    *vault.cached_local_key.lock() = None; // Invalidate cached key
     Ok(())
 }
 
@@ -130,7 +131,14 @@ pub fn cmd_encrypt_vault(vault: State<'_, AppVault>) -> Result<String, String> {
     let plaintext = serde_json::to_string(&save_obj)
         .map_err(|e| format!("Serialize failed: {}", e))?;
 
-    crypto::encrypt_local(&plaintext, master_pw.expose_secret())
+    // Use cached PBKDF2 key if available, otherwise derive and cache
+    let mut cached = vault.cached_local_key.lock();
+    if cached.is_none() {
+        let (key, salt) = crypto::derive_local_key_fresh(master_pw.expose_secret());
+        *cached = Some(crate::state::CachedLocalKey { key, salt });
+    }
+    let ck = cached.as_ref().unwrap();
+    crypto::encrypt_local_with_key(&plaintext, &ck.key, &ck.salt)
 }
 
 /// Encrypt nonce backup (users + settings) using private key as passphrase.
@@ -148,7 +156,14 @@ pub fn cmd_encrypt_nonce_backup(vault: State<'_, AppVault>) -> Result<String, St
     let plaintext = serde_json::to_string(&backup_obj)
         .map_err(|e| format!("Serialize failed: {}", e))?;
 
-    crypto::encrypt_local(&plaintext, &secrets.private_key)
+    // Use cached PBKDF2 key for nonce backup (avoids 600K iterations per call)
+    let mut cached = vault.cached_nonce_key.lock();
+    if cached.is_none() {
+        let (key, salt) = crypto::derive_local_key_fresh(&secrets.private_key);
+        *cached = Some(crate::state::CachedLocalKey { key, salt });
+    }
+    let ck = cached.as_ref().unwrap();
+    crypto::encrypt_local_with_key(&plaintext, &ck.key, &ck.salt)
 }
 
 /// Decrypt vault from localStorage envelope + password.
@@ -159,7 +174,7 @@ pub fn cmd_unlock_vault(
     password: String,
     vault: State<'_, AppVault>,
 ) -> Result<VaultPublicInfo, String> {
-    let plaintext = crypto::decrypt_local(&encrypted, &password)?;
+    let (plaintext, decrypt_key, decrypt_salt) = crypto::decrypt_local_keep_key(&encrypted, &password)?;
 
     #[derive(Deserialize)]
     struct SavedVault {
@@ -206,12 +221,15 @@ pub fn cmd_unlock_vault(
     *vault.secrets.lock() = Some(secrets);
     *vault.nostr_keys.lock() = Some(nostr_keys);
     *vault.legacy_nostr_keys.lock() = legacy_nostr_keys;
-    *vault.master_password.lock() = Some(SecretString::from(password));
+    *vault.master_password.lock() = Some(SecretString::from(password.clone()));
     {
         let mut data = vault.data.lock();
         data.users = saved.users;
         data.settings = saved.settings;
     }
+
+    // Cache the PBKDF2 key from decrypt so subsequent saves are instant (no re-derivation)
+    *vault.cached_local_key.lock() = Some(crate::state::CachedLocalKey { key: decrypt_key, salt: decrypt_salt });
 
     vault.mlock_secrets();
 

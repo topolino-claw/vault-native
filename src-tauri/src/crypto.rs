@@ -448,8 +448,47 @@ pub fn encrypt_local(plaintext: &str, passphrase: &str) -> Result<String, String
     serde_json::to_string(&envelope).map_err(|e| format!("JSON serialize failed: {}", e))
 }
 
+/// Encrypt plaintext with a pre-derived AES-256-GCM key and salt (skips PBKDF2).
+pub fn encrypt_local_with_key(plaintext: &str, key: &[u8; 32], salt: &[u8; 16]) -> Result<String, String> {
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|e| format!("AES key init failed: {}", e))?;
+
+    let mut iv_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut iv_bytes);
+    let nonce = Nonce::from_slice(&iv_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, plaintext.as_bytes())
+        .map_err(|e| format!("Encryption failed: {}", e))?;
+
+    let envelope = LocalEnvelope {
+        v: LOCAL_ENCRYPT_VERSION,
+        salt: base64_encode(salt),
+        iv: base64_encode(&iv_bytes),
+        ciphertext: base64_encode(&ciphertext),
+    };
+
+    iv_bytes.zeroize();
+
+    serde_json::to_string(&envelope).map_err(|e| format!("JSON serialize failed: {}", e))
+}
+
+/// Derive AES-256-GCM key from passphrase + random salt. Returns (key, salt).
+pub fn derive_local_key_fresh(passphrase: &str) -> ([u8; 32], [u8; 16]) {
+    let mut salt = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut salt);
+    let key = derive_local_key(passphrase.as_bytes(), &salt);
+    (key, salt)
+}
+
 /// Decrypt a v3 JSON envelope string with AES-256-GCM.
 pub fn decrypt_local(envelope_str: &str, passphrase: &str) -> Result<String, String> {
+    let (plaintext, _key, _salt) = decrypt_local_keep_key(envelope_str, passphrase)?;
+    Ok(plaintext)
+}
+
+/// Decrypt and also return the derived PBKDF2 key + salt for caching.
+pub fn decrypt_local_keep_key(envelope_str: &str, passphrase: &str) -> Result<(String, [u8; 32], [u8; 16]), String> {
     let envelope: LocalEnvelope =
         serde_json::from_str(envelope_str).map_err(|e| format!("Invalid envelope: {}", e))?;
 
@@ -461,18 +500,21 @@ pub fn decrypt_local(envelope_str: &str, passphrase: &str) -> Result<String, Str
     let iv = base64_decode(&envelope.iv)?;
     let ciphertext = base64_decode(&envelope.ciphertext)?;
 
-    let mut key_bytes = derive_local_key(passphrase.as_bytes(), &salt);
+    let key_bytes = derive_local_key(passphrase.as_bytes(), &salt);
 
     let cipher = Aes256Gcm::new_from_slice(&key_bytes)
         .map_err(|e| format!("AES key init failed: {}", e))?;
-    key_bytes.zeroize();
 
     let nonce = Nonce::from_slice(&iv);
     let plaintext = cipher
         .decrypt(nonce, ciphertext.as_ref())
         .map_err(|_| "Decryption failed (wrong password or corrupted data)".to_string())?;
 
-    String::from_utf8(plaintext).map_err(|e| format!("UTF-8 decode failed: {}", e))
+    let mut salt_arr = [0u8; 16];
+    salt_arr.copy_from_slice(&salt);
+
+    let text = String::from_utf8(plaintext).map_err(|e| format!("UTF-8 decode failed: {}", e))?;
+    Ok((text, key_bytes, salt_arr))
 }
 
 // ── Backup encryption (Layer 1, matching JS backup password flow) ───────

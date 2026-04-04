@@ -32,6 +32,7 @@ let unlockLockoutUntil = 0;
 let clipboardClearTimer = null;
 let _masterPassword = null;
 let _vaultInitialized = false; // True when vault has been initialized/unlocked (Tauri or legacy)
+let _backupInProgress = false; // Mutex to serialize backup publishes
 
 const INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const VISIBILITY_LOCK_MS = 2 * 60 * 1000; // 2 minutes hidden = lock
@@ -59,9 +60,8 @@ function mergeUsers(remoteUsers) {
         if (!vault.users[user]) vault.users[user] = {};
         Object.entries(sites).forEach(([site, nonce]) => {
             if (!Number.isInteger(nonce) || nonce < 0) return; // skip invalid nonces
-            if (vault.users[user][site] === undefined || nonce > vault.users[user][site]) {
-                vault.users[user][site] = nonce;
-            }
+            // Accept the remote nonce — the latest event (by created_at) is authoritative
+            vault.users[user][site] = nonce;
         });
     });
 }
@@ -905,6 +905,7 @@ async function checkForRemoteBackups() {
 
     showLoading(`Looking for remote backups...\n${npubShort}`);
 
+    setRelayStatus('syncing');
     try {
         const { found } = await silentRestoreFromNostr();
         hideLoading();
@@ -936,6 +937,13 @@ async function checkForRemoteBackups() {
 async function silentRestoreFromNostr() {
     if (!_vaultInitialized && !vault.privateKey) return { found: false };
 
+    // Cancel any pending debounced backup to prevent stale data from racing
+    if (_backupDebounceTimer) {
+        clearTimeout(_backupDebounceTimer);
+        _backupDebounceTimer = null;
+        console.log('[relay] silentRestoreFromNostr: cancelled pending debounced backup');
+    }
+
     const { sk, pk } = await getNostrKeyPair();
 
     // Helper: query all relays for backup events authored by a given pubkey
@@ -947,7 +955,7 @@ async function silentRestoreFromNostr() {
             const events = await subscribeAndCollect(relay, [
                 { kinds: [30078], authors: [authorPk], "#d": [BACKUP_D_TAG], limit: 1 },
                 { kinds: [1], authors: [authorPk], "#t": ["nostr-pwd-backup"], limit: 1 }
-            ], 6000);
+            ], 2000);
             relay.close();
             if (events.length > 0) {
                 debugLog(`silentRestoreFromNostr: ${url} returned ${events.length} event(s)`);
@@ -1435,12 +1443,9 @@ async function copyPassword() {
         showToast('Copy failed');
     });
 
-    // Persist nonce changes to local backup immediately (nonce may have changed)
-    await saveLocalNonceBackup();
-    await autoSaveVault();
-
-    // Background sync to Nostr
-    backupToNostrDebounced();
+    // Persist in background — don't block UI
+    saveLocalNonceBackup().catch(() => {});
+    autoSaveVault().then(() => backupToNostrDebounced()).catch(() => {});
 }
 
 /**
@@ -1472,9 +1477,9 @@ async function deleteSite(site, user) {
 
     showToast('Site deleted');
     renderSiteList();
-    await saveLocalNonceBackup();
-    await autoSaveVault();
-    backupToNostrDebounced();
+    // Persist in background — don't block UI
+    saveLocalNonceBackup().catch(() => {});
+    autoSaveVault().then(() => backupToNostrDebounced()).catch(() => {});
 }
 
 /**
@@ -1632,6 +1637,15 @@ async function unlockVault() {
         return;
     }
 
+    // Show loading state so the UI doesn't appear frozen during PBKDF2
+    const btn = document.getElementById('btnUnlockVault');
+    const btnText = btn.textContent;
+    btn.textContent = 'Unlocking…';
+    btn.disabled = true;
+
+    // Yield to the event loop so the UI updates before the heavy crypto work
+    await new Promise(r => setTimeout(r, 50));
+
     try {
         const stored = localStorage.getItem('vaultEncrypted');
         if (!stored) { showToast('No saved vault found'); return; }
@@ -1776,6 +1790,9 @@ async function unlockVault() {
         } else {
             showToast('Invalid password');
         }
+    } finally {
+        btn.textContent = btnText;
+        btn.disabled = false;
     }
 }
 
@@ -2026,7 +2043,7 @@ async function connectRelay(url, timeoutMs = 5000) {
  * @param {number}   [timeoutMs=8000] - Maximum wait time in milliseconds.
  * @returns {Promise<object[]>} Array of Nostr event objects.
  */
-function subscribeAndCollect(relay, filters, timeoutMs = 8000) {
+function subscribeAndCollect(relay, filters, timeoutMs = 3000) {
     return new Promise(resolve => {
         const events = [];
         const sub = relay.sub(filters);
@@ -2330,6 +2347,69 @@ function showBackupPasswordModal(mode) {
 const BACKUP_D_TAG = 'vault-backup';
 
 /**
+ * Fetch the latest backup event from all configured relays for the current key pair.
+ * Tries NIP-06 key first, then legacy SHA-256 key as fallback.
+ *
+ * @returns {Promise<{event: object, sk: string, pk: string, legacy: boolean}|null>}
+ */
+async function fetchLatestBackupEvent() {
+    const { sk, pk } = await getNostrKeyPair();
+
+    async function queryRelays(authorPk) {
+        let latest = null;
+        const results = await Promise.allSettled(RELAYS.map(async (url) => {
+            const relay = await connectRelay(url);
+            const events = await subscribeAndCollect(relay, [
+                { kinds: [30078], authors: [authorPk], "#d": [BACKUP_D_TAG], limit: 1 },
+                { kinds: [1], authors: [authorPk], "#t": ["nostr-pwd-backup"], limit: 1 }
+            ], 2000);
+            relay.close();
+            return events;
+        }));
+        for (const r of results) {
+            if (r.status === 'fulfilled') {
+                for (const e of r.value) {
+                    if (!latest || e.created_at > latest.created_at) latest = e;
+                }
+            }
+        }
+        return latest;
+    }
+
+    let latest = await queryRelays(pk);
+    if (latest) return { event: latest, sk, pk, legacy: false };
+
+    // Legacy fallback
+    const legacy = await getLegacyNostrKeyPair();
+    if (legacy.pk !== pk) {
+        latest = await queryRelays(legacy.pk);
+        if (latest) return { event: latest, sk: legacy.sk, pk: legacy.pk, legacy: true };
+    }
+
+    return null;
+}
+
+/**
+ * Decrypt a backup event silently (no password prompt).
+ * Returns parsed {users, settings} or null on failure.
+ *
+ * @param {object} event - Nostr event
+ * @param {string} sk - Secret key
+ * @param {string} pk - Public key
+ * @param {boolean} useLegacy - Whether to use legacy decryption
+ * @returns {Promise<{users: object, settings: object}|null>}
+ */
+async function decryptBackupEventSilent(event, sk, pk, useLegacy) {
+    try {
+        const decrypted = await decryptBackupEvent(event, sk, pk, false, useLegacy);
+        return JSON.parse(decrypted);
+    } catch (e) {
+        debugLog('decryptBackupEventSilent: failed:', e);
+        return null;
+    }
+}
+
+/**
  * Encrypt and publish vault data to all configured Nostr relays.
  *
  * Double-encryption flow:
@@ -2350,6 +2430,13 @@ async function backupToNostr(silent = false) {
         return;
     }
 
+    if (_backupInProgress) {
+        console.log('[relay] backupToNostr: already in progress, skipping');
+        return;
+    }
+    _backupInProgress = true;
+
+    setRelayStatus('syncing');
     try {
         let event;
         const vaultData = JSON.stringify({ users: vault.users, settings: vault.settings });
@@ -2383,7 +2470,6 @@ async function backupToNostr(silent = false) {
         }
 
         console.log(`[relay] backupToNostr: starting parallel publish to ${RELAYS.length} relays`);
-        setRelayStatus('syncing');
 
         if (debugMode) {
             const nevent = encodeNevent(event.id, RELAYS);
@@ -2449,6 +2535,8 @@ async function backupToNostr(silent = false) {
         debugLog('backupToNostr: unexpected error:', e);
         setRelayStatus('failed');
         if (!silent) showToast('Backup error');
+    } finally {
+        _backupInProgress = false;
     }
 }
 
@@ -2532,6 +2620,14 @@ async function restoreFromNostr() {
         return;
     }
 
+    // Cancel any pending debounced backup to prevent stale data from racing
+    if (_backupDebounceTimer) {
+        clearTimeout(_backupDebounceTimer);
+        _backupDebounceTimer = null;
+        console.log('[relay] restoreFromNostr: cancelled pending debounced backup');
+    }
+
+    setRelayStatus('syncing');
     try {
         const { sk, pk } = await getNostrKeyPair();
 
@@ -2585,15 +2681,19 @@ async function restoreFromNostr() {
             } else {
                 showToast('Restored from Nostr!');
             }
+            setRelayStatus('synced');
             renderSiteList();
         } else {
+            setRelayStatus(_lastSettledRelayStatus === 'synced' ? 'synced' : 'idle');
             showToast('No backup found');
         }
     } catch (e) {
         if (e.message && e.message.includes('cancelled')) {
+            setRelayStatus(_lastSettledRelayStatus || 'idle');
             showToast('Restore cancelled');
         } else {
             console.error('restoreFromNostr: error:', e);
+            setRelayStatus('failed');
             showToast(`Restore error: ${e.message || e}`);
         }
     }
