@@ -1,6 +1,6 @@
 # Vault Native
 
-Cross-platform native app wrapping [Vault Web](https://github.com/topolino-claw/PasswordManagerWeb) via Tauri 2.
+Offline-first password manager built with Tauri 2. Vault data is encrypted with the master password and stored in a user-selected file that can be synced with tools like Syncthing.
 
 ## Platforms
 - macOS (.dmg)
@@ -35,5 +35,4 @@ cargo tauri dev
 
 ## Source
 
-The `vault/` directory contains the web app from [PasswordManagerWeb](https://github.com/topolino-claw/PasswordManagerWeb).
-All vault JS logic is unchanged. Tauri is a shell — no JS modifications.
+The `vault/` directory contains the app UI and vault logic. `src-tauri/` contains the native shell and file commands. Generated Android output is intentionally not kept in the repo.
