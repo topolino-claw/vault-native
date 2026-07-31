@@ -36,3 +36,7 @@ cargo tauri dev
 ## Source
 
 The `vault/` directory contains the app UI and vault logic. `src-tauri/` contains the native shell and file commands. Generated Android output is intentionally not kept in the repo.
+
+## Vault file format
+
+The encrypted vault file is shared with the [Topolino Vault Obsidian plugin](https://github.com/Fabricio333/topolino-vault-obsidian); the plugin's `src/core/envelope.ts` is the reference implementation and `vault/envelope.js` here is its direct port. Format v2: PBKDF2-SHA256 (600k iterations) → AES-256-GCM. Legacy v1 files (CryptoJS EVP) are read-only and upgraded to v2 on the next save. `node test/envelope-cross.test.mjs` proves both implementations read each other's output — keep it green when touching either side.
