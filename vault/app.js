@@ -38,7 +38,40 @@ const UNLOCK_LOCKOUT_MS = 30 * 1000; // 30 seconds
 const DEFAULT_HASH_LENGTH = 16;
 
 let _sessionLocalPassword = null;
+// v2 crypto session state: AES key derived once per unlock so saves don't
+// re-run the 600k-iteration KDF. Salt stays stable across saves (fresh IV
+// per write is what GCM needs); all three are bound to the same password.
+let _sessionKey = null;
+let _sessionSalt = null;
+let _sessionIterations = VaultEnvelope.V2_ITERATIONS;
 let vaultFilePath = localStorage.getItem('vaultFilePath') || '';
+
+function setSessionPassword(password) {
+    if (password !== _sessionLocalPassword) {
+        _sessionKey = null;
+        _sessionSalt = null;
+        _sessionIterations = VaultEnvelope.V2_ITERATIONS;
+    }
+    _sessionLocalPassword = password;
+}
+
+async function ensureSessionKey(password) {
+    setSessionPassword(password);
+    if (!_sessionKey) {
+        _sessionSalt = VaultEnvelope.randomSalt();
+        _sessionIterations = VaultEnvelope.V2_ITERATIONS;
+        _sessionKey = await VaultEnvelope.deriveVaultKey(password, _sessionSalt, _sessionIterations);
+    }
+    return _sessionKey;
+}
+
+/** Adopt password + key/salt/iterations from a decryptEnvelope() result. */
+function adoptSessionCrypto(password, result) {
+    _sessionLocalPassword = password;
+    _sessionKey = result.key;
+    _sessionSalt = result.salt;
+    _sessionIterations = result.iterations;
+}
 
 // ============================================
 // Debug Guard
@@ -89,7 +122,7 @@ async function chooseVaultFilePath() {
 
 async function writeSelectedVaultFile(password) {
     if (!vaultFilePath || !hasTauri()) return false;
-    const contents = encryptVaultPayload(password);
+    const contents = await encryptVaultPayload(password);
     await tauriInvoke('write_vault_file', { path: vaultFilePath, contents });
     const saved = await tauriInvoke('read_vault_file', { path: vaultFilePath });
     if (saved !== contents) throw new Error('Vault file write verification failed');
@@ -527,6 +560,9 @@ function lockVault(skipConfirm = false) {
     if (clipboardClearTimer) clearTimeout(clipboardClearTimer);
     clipboardClearTimer = null;
     navigator.clipboard.writeText('').catch(() => {});
+    _sessionLocalPassword = null;
+    _sessionKey = null;
+    _sessionSalt = null;
     vault = { privateKey: '', seedPhrase: '', passphrase: '', users: {}, settings: { hashLength: DEFAULT_HASH_LENGTH } };
     navigationStack = [hasSavedEncryptedVault() ? 'unlockScreen' : 'welcomeScreen'];
 
@@ -854,38 +890,69 @@ async function unlockVault() {
         return;
     }
 
+    showLoading('Unlocking vault');
     try {
-        const key = hash(password);
-        let stored = JSON.parse(localStorage.getItem('vaultEncrypted') || '{}');
-        const encrypted = stored[key];
+        // The synced vault file is the source of truth: unlocking from it picks
+        // up changes made on other devices since the last unlock here. The
+        // localStorage backup is the fallback when the file is missing/unreadable.
+        let result = null;
+        let source = null;
 
-        if (!encrypted) {
-            unlockAttempts++;
-            if (unlockAttempts >= MAX_UNLOCK_ATTEMPTS) {
-                unlockLockoutUntil = Date.now() + UNLOCK_LOCKOUT_MS;
-                unlockAttempts = 0;
-                showToast(`Too many attempts. Locked for 30s`);
-            } else {
-                showToast(`Wrong password (${MAX_UNLOCK_ATTEMPTS - unlockAttempts} attempts left)`);
+        if (vaultFilePath && hasTauri()) {
+            let fileContents = null;
+            try {
+                fileContents = await tauriInvoke('read_vault_file', { path: vaultFilePath });
+            } catch (e) {
+                debugLog('vault file read failed, falling back to local backup:', e);
             }
-            return;
+            if (fileContents !== null && VaultEnvelope.looksLikeVaultFile(fileContents)) {
+                result = await VaultEnvelope.decryptEnvelope(fileContents, password);
+                source = 'file';
+            }
         }
 
-        const decrypted = CryptoJS.AES.decrypt(encrypted, password).toString(CryptoJS.enc.Utf8);
-        const data = JSON.parse(decrypted);
-        if (data.privateKey) {
-            vault.privateKey = data.privateKey;
-            vault.seedPhrase = data.seedPhrase || '';
-            vault.passphrase = data.passphrase || '';
-            vault.users = data.users || {};
-            vault.settings = data.settings || { hashLength: 16 };
-        } else {
-            vault = data;
-            vault.passphrase = vault.passphrase || '';
+        if (!result) {
+            const key = hash(password);
+            const stored = JSON.parse(localStorage.getItem('vaultEncrypted') || '{}');
+            const encrypted = stored[key];
+
+            if (!encrypted) {
+                unlockAttempts++;
+                if (unlockAttempts >= MAX_UNLOCK_ATTEMPTS) {
+                    unlockLockoutUntil = Date.now() + UNLOCK_LOCKOUT_MS;
+                    unlockAttempts = 0;
+                    showToast(`Too many attempts. Locked for 30s`);
+                } else {
+                    showToast(`Wrong password (${MAX_UNLOCK_ATTEMPTS - unlockAttempts} attempts left)`);
+                }
+                return;
+            }
+
+            if (VaultEnvelope.looksLikeVaultFile(encrypted)) {
+                result = await VaultEnvelope.decryptEnvelope(encrypted, password);
+            } else {
+                // Legacy backup slot: raw CryptoJS ciphertext from before the v2 port.
+                const decrypted = CryptoJS.AES.decrypt(encrypted, password).toString(CryptoJS.enc.Utf8);
+                if (!decrypted) throw new Error('decrypt failed');
+                const data = VaultEnvelope.normalizeVaultData(JSON.parse(decrypted));
+                const salt = VaultEnvelope.randomSalt();
+                const vKey = await VaultEnvelope.deriveVaultKey(password, salt);
+                result = { data, key: vKey, salt, iterations: VaultEnvelope.V2_ITERATIONS, legacy: true };
+            }
+            source = 'local';
         }
 
-        _sessionLocalPassword = password;
+        applyVaultSnapshot(result.data);
+        adoptSessionCrypto(password, result);
         unlockAttempts = 0;
+
+        // Refresh the local backup as v2. Only re-write the FILE when upgrading
+        // a legacy v1 file — never after a local-backup unlock, which would
+        // clobber a possibly-newer synced file we failed to read.
+        await saveEncryptedVault(password);
+        if (source === 'file' && result.legacy) {
+            await writeSelectedVaultFile(password);
+        }
 
         resetInactivityTimer();
         showToast('Vault unlocked!');
@@ -901,6 +968,8 @@ async function unlockVault() {
         } else {
             showToast('Invalid password');
         }
+    } finally {
+        hideLoading();
     }
 }
 
@@ -919,18 +988,15 @@ function vaultSnapshot() {
     };
 }
 
-function encryptVaultPayload(password) {
-    return JSON.stringify({
-        v: 1,
-        type: 'topolino-vault',
-        payload: CryptoJS.AES.encrypt(JSON.stringify(vaultSnapshot()), password).toString()
-    });
+async function encryptVaultPayload(password) {
+    const key = await ensureSessionKey(password);
+    return VaultEnvelope.encryptEnvelope(vaultSnapshot(), key, _sessionSalt, _sessionIterations);
 }
 
-function saveEncryptedVault(password) {
+async function saveEncryptedVault(password) {
     const key = hash(password);
     const stored = JSON.parse(localStorage.getItem('vaultEncrypted') || '{}');
-    stored[key] = CryptoJS.AES.encrypt(JSON.stringify(vaultSnapshot()), password).toString();
+    stored[key] = await encryptVaultPayload(password);
     localStorage.setItem('vaultEncrypted', JSON.stringify(stored));
 }
 
@@ -942,11 +1008,13 @@ function removeEncryptedVaultPassword(password) {
 
 function saveUnlockedVaultSnapshot() {
     if (!_sessionLocalPassword || !vault.privateKey) return;
-    saveEncryptedVault(_sessionLocalPassword);
-    writeSelectedVaultFile(_sessionLocalPassword).catch(e => {
-        console.error('vault file write failed:', e);
-        showToast('Could not write vault file');
-    });
+    const password = _sessionLocalPassword;
+    saveEncryptedVault(password)
+        .then(() => writeSelectedVaultFile(password))
+        .catch(e => {
+            console.error('vault file write failed:', e);
+            showToast('Could not write vault file');
+        });
 }
 
 function applyVaultSnapshot(data) {
@@ -975,10 +1043,9 @@ async function downloadData() {
     const password = _sessionLocalPassword || prompt('Password for encrypted vault file');
     if (!password) return;
 
-    _sessionLocalPassword = password;
-    saveEncryptedVault(password);
+    await saveEncryptedVault(password);
 
-    const contents = encryptVaultPayload(password);
+    const contents = await encryptVaultPayload(password);
 
     if (hasTauri()) {
         showLoading('Choose export file');
@@ -1049,8 +1116,7 @@ async function setupVaultStorage() {
     if (!vaultFilePath && !(await chooseVaultFilePath())) return;
 
     try {
-        _sessionLocalPassword = pass1;
-        saveEncryptedVault(pass1);
+        await saveEncryptedVault(pass1);
         await writeSelectedVaultFile(pass1);
         showToast('Vault file saved');
         showScreen('mainScreen');
@@ -1071,22 +1137,22 @@ async function importVaultFile() {
         const path = await tauriInvoke('open_vault_file');
         if (!path) return;
 
-        const parsed = JSON.parse(await tauriInvoke('read_vault_file', { path }));
-        if (parsed.type !== 'topolino-vault' || !parsed.payload) throw new Error('invalid vault file');
+        const contents = await tauriInvoke('read_vault_file', { path });
+        if (!VaultEnvelope.looksLikeVaultFile(contents)) throw new Error('invalid vault file');
 
         const password = prompt('Password for this vault file');
         if (!password) return;
 
-        const decrypted = CryptoJS.AES.decrypt(parsed.payload, password).toString(CryptoJS.enc.Utf8);
-        if (!decrypted) throw new Error('decrypt failed');
-        const data = JSON.parse(decrypted);
+        const result = await VaultEnvelope.decryptEnvelope(contents, password);
+        const data = result.data;
         if (!data.users || typeof data.users !== 'object') throw new Error('invalid vault data');
 
         if (!vault.privateKey) {
             applyVaultSnapshot(data);
             setVaultFilePath(path);
-            _sessionLocalPassword = password;
-            saveEncryptedVault(password);
+            adoptSessionCrypto(password, result);
+            await saveEncryptedVault(password);
+            if (result.legacy) await writeSelectedVaultFile(password);
         } else {
             const siteCount = Object.values(data.users).reduce((n, u) => n + Object.keys(u || {}).length, 0);
             if (!confirm('Import ' + siteCount + ' site(s)? This will merge with your current vault.')) return;
@@ -1133,9 +1199,8 @@ async function changeMasterPassword() {
 
     try {
         await writeSelectedVaultFile(next);
-        saveEncryptedVault(next);
+        await saveEncryptedVault(next);
         removeEncryptedVaultPassword(current);
-        _sessionLocalPassword = next;
         document.getElementById('currentMasterPassword').value = '';
         document.getElementById('newMasterPassword').value = '';
         document.getElementById('confirmMasterPassword').value = '';
