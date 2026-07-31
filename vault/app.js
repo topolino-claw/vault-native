@@ -1126,6 +1126,33 @@ async function setupVaultStorage() {
     }
 }
 
+/**
+ * Android only: the open-file picker (ACTION_OPEN_DOCUMENT) grants a
+ * READ-only persistable URI permission — every later save to that URI would
+ * fail. The save dialog (ACTION_CREATE_DOCUMENT) is the flow that grants
+ * persistable read+WRITE, and it can target the existing file. So after
+ * adopting a vault via the open picker, route the user through the save
+ * dialog once, pointed at the same file, and verify with a real write.
+ * Desktop paths are plain filesystem paths with full access — no-op there.
+ */
+async function ensureWritableVaultPath() {
+    if (!vaultFilePath.startsWith('content://')) return;
+    try {
+        await writeSelectedVaultFile(_sessionLocalPassword);
+        return; // write permission already present
+    } catch (e) {
+        debugLog('adopted vault URI is read-only, requesting writable pick:', e);
+    }
+    alert('One more step: Android needs write access to the vault file.\n\nIn the next dialog, select the SAME file again and confirm overwriting it.');
+    const writable = await tauriInvoke('choose_vault_file');
+    if (!writable) {
+        showToast('Vault is read-only: saves will fail until you re-select the file');
+        return;
+    }
+    setVaultFilePath(writable);
+    await writeSelectedVaultFile(_sessionLocalPassword);
+}
+
 async function importVaultFile() {
     if (!hasTauri()) {
         showToast('Native file picker unavailable');
@@ -1152,6 +1179,7 @@ async function importVaultFile() {
             setVaultFilePath(path);
             adoptSessionCrypto(password, result);
             await saveEncryptedVault(password);
+            await ensureWritableVaultPath();
             if (result.legacy) await writeSelectedVaultFile(password);
         } else {
             const siteCount = Object.values(data.users).reduce((n, u) => n + Object.keys(u || {}).length, 0);
