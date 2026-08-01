@@ -1,0 +1,8 @@
+# Rust / Tauri build output
+src-tauri/target/
+src-tauri/gen/
+
+# Signed release artifacts (distributed via GitHub releases, not the repo)
+*.apk
+*.apk.idsig
+*.aab
