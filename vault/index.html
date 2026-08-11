@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none';">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <meta name="theme-color" content="#0f0f0f">
     <meta name="mobile-web-app-capable" content="yes">
@@ -741,6 +741,13 @@
             <input type="password" id="unlockPassword" autocomplete="current-password">
         </div>
         <button class="btn btn-primary" id="btnUnlockVault">Unlock Vault</button>
+        <div class="spacer"></div>
+        <!--
+          Escape hatch for a device that cannot be unlocked. Clears local state
+          only; the synced vault files are left alone so another device can
+          still recover them.
+        -->
+        <button class="btn btn-ghost" id="btnResetDeviceUnlock">Can't unlock? Reset this device</button>
     </div>
 
     <!-- Screen: Create New Wallet -->
@@ -825,18 +832,19 @@ Generate New
                 <h2>Vault File</h2>
             </div>
         </div>
-        <p class="text-muted text-sm mb-8">Choose where this vault file lives, then set the password that encrypts it.</p>
+        <p class="text-muted text-sm mb-8" id="storageSetupHint">Choose where this vault lives, then set the password that encrypts it.</p>
         <div class="path-pill mb-8">
-            <span id="vaultPathLabel">No vault file selected</span>
+            <span id="vaultPathLabel">No vault location selected</span>
         </div>
         <div class="button-stack mb-8">
-            <button class="btn btn-secondary" id="btnChooseVaultPath">Choose Vault File</button>
+            <button class="btn btn-secondary" id="btnChooseVaultPath">New Vault Location</button>
+            <button class="btn btn-secondary" id="btnOpenExistingVault">Open Existing Vault</button>
         </div>
         <div class="input-group">
-            <label>Vault Password</label>
+            <label id="storagePass1Label">Vault Password</label>
             <input type="password" id="storagePass1" placeholder="Enter password" autocomplete="new-password">
         </div>
-        <div class="input-group">
+        <div class="input-group" id="storagePass2Group">
             <label>Confirm Password</label>
             <input type="password" id="storagePass2" placeholder="Confirm password" autocomplete="new-password">
         </div>
@@ -907,7 +915,7 @@ Generate New
         <div class="settings-item" data-screen="backupScreen">
             <div>
                 <div class="settings-label">Vault File</div>
-                <div class="settings-desc">Selected path and encrypted sync file</div>
+                <div class="settings-desc" id="vaultPathSettings">No vault location selected</div>
             </div>
             <span class="chevron">›</span>
         </div>
@@ -932,6 +940,7 @@ Generate New
         </div>
         <div class="spacer"></div>
         <button class="btn btn-danger" id="btnLockVault">Lock Vault</button>
+        <button class="btn btn-ghost" id="btnResetDevice">Reset This Device</button>
     </div>
 
     <!-- Screen: Change Password -->
@@ -967,6 +976,11 @@ Generate New
             </div>
         </div>
         <p class="text-muted text-sm mb-8">Export one encrypted vault file. Put it in a Syncthing folder to sync it between devices.</p>
+        <div class="input-group">
+            <label>Vault location</label>
+            <div id="vaultPathBackup" class="settings-desc" style="word-break: break-all;">No vault location selected</div>
+        </div>
+        <div id="backupWarning" class="text-sm mb-8 hidden" style="color: var(--danger);"></div>
         <div id="backupPasswordStatus" class="version-badge mb-8">
             <span>Encrypted file, no cloud account</span>
         </div>
@@ -975,6 +989,7 @@ Generate New
             <button class="btn btn-secondary" id="btnMoveVaultFile">Move Vault File</button>
             <button class="btn btn-secondary" id="btnExportVaultFile">Export Encrypted File</button>
             <button class="btn btn-secondary" id="btnImportVaultFile">Import Vault File</button>
+            <button class="btn btn-secondary" id="btnMergeSyncConflicts">Merge Sync Conflicts</button>
         </div>
     </div>
 
@@ -991,12 +1006,123 @@ Generate New
         <button class="btn btn-secondary mt-24" id="btnCopySeedPhrase">Copy to Clipboard</button>
     </div>
 
+    <!-- Screen: Authenticator (TOTP) -->
+    <div id="totpScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-screen="settingsScreen" aria-label="Back">‹</button>
+                <h2>Authenticator</h2>
+            </div>
+        </div>
+        <div id="totpList" class="site-list"></div>
+        <div id="totpEmpty" class="empty-state hidden">
+            <p>No 2FA codes yet</p>
+            <p class="text-sm mt-16">Tap + to add one — tap a code to copy it</p>
+        </div>
+        <button class="fab-add" id="btnAddTotp" aria-label="Add 2FA code">+</button>
+    </div>
+
+    <!-- Screen: Add TOTP -->
+    <div id="totpAddScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-screen="totpScreen" aria-label="Back">‹</button>
+                <h2>Add 2FA Code</h2>
+            </div>
+        </div>
+        <p class="text-muted text-sm mb-8">Paste an <code>otpauth://</code> link, or enter the issuer and base32 secret.</p>
+        <div class="input-group"><label>otpauth:// link (optional)</label><input type="text" id="totpUri" placeholder="otpauth://totp/..."></div>
+        <div class="input-group"><label>Issuer</label><input type="text" id="totpIssuer" placeholder="GitHub"></div>
+        <div class="input-group"><label>Account (optional)</label><input type="text" id="totpAccount" placeholder="me@example.com"></div>
+        <div class="input-group"><label>Secret (base32)</label><input type="text" id="totpSecret" placeholder="JBSWY3DPEHPK3PXP"></div>
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="btnSaveTotp">Save</button>
+    </div>
+
+    <!-- Screen: Secure Notes -->
+    <div id="notesScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-screen="settingsScreen" aria-label="Back">‹</button>
+                <h2>Secure Notes</h2>
+            </div>
+        </div>
+        <div id="notesList" class="site-list"></div>
+        <div id="notesEmpty" class="empty-state hidden">
+            <p>No notes yet</p>
+            <p class="text-sm mt-16">Tap + to add one</p>
+        </div>
+        <button class="fab-add" id="btnAddNote" aria-label="Add note">+</button>
+    </div>
+
+    <!-- Screen: Edit Note -->
+    <div id="noteEditScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-screen="notesScreen" aria-label="Back">‹</button>
+                <h2 id="noteEditTitle">Note</h2>
+            </div>
+        </div>
+        <input type="hidden" id="noteEditId">
+        <div class="input-group"><label>Title</label><input type="text" id="noteTitle" placeholder="Title"></div>
+        <div class="input-group"><label>Body</label><textarea id="noteBody" rows="8" placeholder="Recovery codes, PINs, migrated logins — anything secret"></textarea></div>
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="btnSaveNote">Save Note</button>
+        <button class="btn btn-danger mt-8 hidden" id="btnDeleteNote">Delete</button>
+    </div>
+
+    <!-- Screen: Import CSV -->
+    <div id="csvImportScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-screen="backupScreen" aria-label="Back">‹</button>
+                <h2>Import from CSV</h2>
+            </div>
+        </div>
+        <p class="text-muted text-sm mb-8">Paste a CSV exported from Bitwarden, 1Password, Chrome, KeePass, etc. Sites and usernames become entries; any old password/notes are kept as a Secure Note. This app then generates its own password per site.</p>
+        <div class="input-group"><label>CSV</label><textarea id="csvImportText" rows="10" placeholder="name,url,username,password,notes&#10;..."></textarea></div>
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="btnDoImportCsv">Import</button>
+    </div>
+
+    <!-- Screen: Export CSV -->
+    <div id="csvExportScreen" class="screen hidden">
+        <div class="header">
+            <div class="header-left">
+                <button class="btn btn-ghost btn-icon" data-screen="backupScreen" aria-label="Back">‹</button>
+                <h2>Export to CSV</h2>
+            </div>
+        </div>
+        <p class="text-muted text-sm mb-8"><strong>Warning:</strong> this contains your generated passwords in plaintext. Only export to move into another manager, then delete it.</p>
+        <div class="input-group"><label>CSV</label><textarea id="csvExportText" rows="10" readonly></textarea></div>
+        <div class="spacer"></div>
+        <button class="btn btn-primary" id="btnCopyCsvExport">Copy to Clipboard</button>
+    </div>
+
     </div><!-- /app-container -->
 
     <!-- Scripts -->
     <script src="bip39WordList.js"></script>
     <script src="crypto-js.min.js"></script>
     <script src="envelope.js"></script>
+    <!--
+      Vault core. Load order matters: each module reads the previous ones off
+      the global, exactly as the Node tests load them, so what ships is what is
+      tested. migrate-legacy.js is the one-shot upgrade — delete this tag with
+      the file (see its header).
+    -->
+    <script src="core/derive.js"></script>
+    <script src="core/util.js"></script>
+    <script src="core/hlc.js"></script>
+    <script src="core/records.js"></script>
+    <script src="core/oplog.js"></script>
+    <script src="core/keyslots.js"></script>
+    <script src="core/store.js"></script>
+    <script src="core/transports.js"></script>
+    <script src="core/migrate-legacy.js"></script>
+    <script src="core/bootstrap.js"></script>
+    <script src="core/totp.js"></script>
+    <script src="core/porter.js"></script>
     <script src="app.js"></script>
 </body>
 </html>

@@ -6,3 +6,5 @@ src-tauri/gen/
 *.apk
 *.apk.idsig
 *.aab
+topolino-offline.keystore
+*.keystore

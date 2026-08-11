@@ -17,6 +17,13 @@
 
     const VAULT_FILE_TYPE = 'topolino-vault';
     const V2_ITERATIONS = 600000;
+    // Upper bound on the KDF cost we will honour from a file. The parameters
+    // live outside the GCM tag, so a foreign or tampered file can set them to
+    // anything; an unbounded iteration count makes deriveVaultKey run for
+    // minutes and hangs unlock/sync on a file merely dropped into the synced
+    // folder — a no-password CPU-exhaustion DoS. 10M is ~16x the current
+    // default: generous headroom for raising the cost later, but bounded.
+    const MAX_ITERATIONS = 10000000;
     const SALT_BYTES = 16;
     const IV_BYTES = 12;
 
@@ -33,6 +40,11 @@
         const bytes = new Uint8Array(bin.length);
         for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
         return bytes;
+    }
+
+    /** A KDF iteration count we are willing to run for a file we did not write. */
+    function isValidIterations(n) {
+        return Number.isInteger(n) && n >= 1 && n <= MAX_ITERATIONS;
     }
 
     async function deriveVaultKey(password, salt, iterations = V2_ITERATIONS) {
@@ -58,14 +70,53 @@
         return salt;
     }
 
+    /**
+     * Coerce a decrypted payload into the shape both apps agree on.
+     *
+     * Unknown top-level keys are PRESERVED. This used to drop them, which
+     * quietly made the file format lossy: any record type one side did not
+     * model was deleted the moment the other side saved. Forward compatibility
+     * requires that an old reader hand back what it could not interpret.
+     * The Obsidian plugin's normalizeVaultData needs the same change — until
+     * it ships, treat the per-device logs as the durable home for anything
+     * outside `users` (see core/store.js).
+     *
+     * Reserved keys are dropped rather than copied: a payload is attacker-
+     * supplied until proven otherwise, and `__proto__` assigned through a
+     * normal property write would reach Object.prototype.
+     */
+    const RESERVED_KEYS = ['__proto__', 'constructor', 'prototype'];
+
     function normalizeVaultData(data) {
-        return {
-            privateKey: data.privateKey || '',
-            seedPhrase: data.seedPhrase || '',
-            passphrase: data.passphrase || '',
-            users: data.users || {},
-            settings: Object.assign({ hashLength: 16 }, data.settings || {})
-        };
+        const src = data !== null && typeof data === 'object' ? data : {};
+        const out = {};
+        Object.keys(src).forEach((key) => {
+            if (RESERVED_KEYS.indexOf(key) === -1) out[key] = src[key];
+        });
+        out.privateKey = src.privateKey || '';
+        out.seedPhrase = src.seedPhrase || '';
+        out.passphrase = src.passphrase || '';
+        out.users = src.users || {};
+        out.settings = Object.assign({ hashLength: 16 }, src.settings || {});
+        return out;
+    }
+
+    /** Merge nonce maps without ever decreasing a password version. */
+    function mergeUsers(target, imported) {
+        let changed = false;
+        Object.entries(imported || {}).forEach(([user, sites]) => {
+            let targetSites = target[user];
+            if (!targetSites) targetSites = target[user] = {};
+            Object.entries(sites || {}).forEach(([site, nonce]) => {
+                if (typeof nonce !== 'number' || !Number.isFinite(nonce)) return;
+                const current = targetSites[site];
+                if (current === undefined || nonce > current) {
+                    targetSites[site] = nonce;
+                    changed = true;
+                }
+            });
+        });
+        return changed;
     }
 
     // ---------- encrypt (always v2) ----------
@@ -106,8 +157,20 @@
         if (!isVaultEnvelope(parsed)) throw new Error('Not a topolino-vault file');
 
         if (parsed.v === 2) {
-            const salt = fromBase64(parsed.kdf.salt);
+            // The KDF/cipher header is outside the GCM tag and therefore
+            // attacker-malleable. Validate its shape and, crucially, bound the
+            // iteration count BEFORE deriving: an unbounded value would hang
+            // deriveVaultKey for minutes on a file dropped into the synced
+            // folder, with no password required (ROADMAP 2.5).
+            if (!parsed.kdf || typeof parsed.kdf !== 'object' ||
+                !parsed.cipher || typeof parsed.cipher !== 'object' ||
+                typeof parsed.kdf.salt !== 'string' ||
+                typeof parsed.cipher.iv !== 'string') {
+                throw new Error('Malformed vault file');
+            }
             const iterations = parsed.kdf.iterations;
+            if (!isValidIterations(iterations)) throw new Error('Vault KDF iterations out of range');
+            const salt = fromBase64(parsed.kdf.salt);
             const key = await deriveVaultKey(password, salt, iterations);
             const iv = fromBase64(parsed.cipher.iv);
             let plaintext;
@@ -148,11 +211,14 @@
     root.VaultEnvelope = {
         VAULT_FILE_TYPE,
         V2_ITERATIONS,
+        MAX_ITERATIONS,
+        isValidIterations,
         toBase64,
         fromBase64,
         deriveVaultKey,
         randomSalt,
         normalizeVaultData,
+        mergeUsers,
         encryptEnvelope,
         decryptEnvelope,
         isVaultEnvelope,

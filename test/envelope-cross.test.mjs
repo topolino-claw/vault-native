@@ -112,4 +112,14 @@ const ok = (name) => { passed++; console.log('ok -', name); };
     ok('tampered payload rejected');
 }
 
+// 7. conflict merge is max-nonce, idempotent and rejects garbage
+{
+    const a = { alice: { github: 1, mail: 4 } };
+    const b = { alice: { github: 3, mail: 2, bad: Infinity }, bob: { cloud: 0 } };
+    assert.strictEqual(native.mergeUsers(a, b), true);
+    assert.deepStrictEqual(a, { alice: { github: 3, mail: 4 }, bob: { cloud: 0 } });
+    assert.strictEqual(native.mergeUsers(a, b), false);
+    ok('sync conflict merge takes max nonce without data loss');
+}
+
 console.log(`\n${passed} passed, 0 failed`);
