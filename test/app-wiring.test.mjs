@@ -717,4 +717,9 @@ await t.test('the vault path is shown on the settings and sync-file screens', as
     assert.strictEqual(dom.document.getElementById('vaultPathBackup').textContent, '/vaults/P');
 });
 
-t.done();
+// Node 22's webcrypto, used inside a vm context (every loadApp here), spawns a
+// worker thread that no handle points at and that keeps the event loop alive
+// forever — this suite gets a green result and then hangs, blocking run-all/CI.
+// All tests are complete by this line, so exit explicitly with the harness
+// verdict. process.exit flushes stdio, so the "ok" lines above survive.
+process.exit(t.done() ? 0 : 1);

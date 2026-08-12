@@ -103,9 +103,24 @@
         return out;
     }
 
+    /**
+     * Encode one CSV cell, defending against spreadsheet formula injection.
+     *
+     * A cell whose raw value starts with `= + - @` (or a tab/CR) is interpreted
+     * as a FORMULA by Excel, Sheets and Calc when the file is opened. Site
+     * names and usernames are attacker-influenced (they arrive via CSV import),
+     * so a crafted `=HYPERLINK(...)` or `+cmd|...` cell would otherwise execute
+     * on open. Prefixing a single quote neutralises it in every mainstream
+     * spreadsheet while staying harmless to parsers. Quoting alone does NOT
+     * help: CSV quotes are framing, stripped before Excel evaluates the cell,
+     * so a quoted `"=1+1"` still runs as a formula.
+     */
     function csvField(v) {
         const s = v == null ? '' : String(v);
-        return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+        const neutralised = /^[=+\-@\t\r]/.test(s) ? "'" + s : s;
+        return /[",\r\n]/.test(neutralised)
+            ? '"' + neutralised.replace(/"/g, '""') + '"'
+            : neutralised;
     }
 
     /**

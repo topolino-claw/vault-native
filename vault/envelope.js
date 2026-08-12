@@ -153,7 +153,12 @@
      * legacy=true means the source was v1 and should be re-written as v2.
      */
     async function decryptEnvelope(fileContents, password) {
-        const parsed = JSON.parse(fileContents);
+        let parsed;
+        try {
+            parsed = JSON.parse(fileContents);
+        } catch (e) {
+            throw new Error('Malformed vault file');
+        }
         if (!isVaultEnvelope(parsed)) throw new Error('Not a topolino-vault file');
 
         if (parsed.v === 2) {
@@ -165,21 +170,37 @@
             if (!parsed.kdf || typeof parsed.kdf !== 'object' ||
                 !parsed.cipher || typeof parsed.cipher !== 'object' ||
                 typeof parsed.kdf.salt !== 'string' ||
-                typeof parsed.cipher.iv !== 'string') {
+                typeof parsed.cipher.iv !== 'string' ||
+                typeof parsed.payload !== 'string') {
                 throw new Error('Malformed vault file');
             }
             const iterations = parsed.kdf.iterations;
             if (!isValidIterations(iterations)) throw new Error('Vault KDF iterations out of range');
-            const salt = fromBase64(parsed.kdf.salt);
+            // Header fields live outside the GCM tag, so their base64 is
+            // attacker-controlled too. Decode them under the malformed-file
+            // contract rather than letting a raw DOMException escape and
+            // distinguish this file's shape for the caller.
+            let salt;
+            let iv;
+            try {
+                salt = fromBase64(parsed.kdf.salt);
+                iv = fromBase64(parsed.cipher.iv);
+            } catch (e) {
+                throw new Error('Malformed vault file');
+            }
             const key = await deriveVaultKey(password, salt, iterations);
-            const iv = fromBase64(parsed.cipher.iv);
             let plaintext;
             try {
                 plaintext = await subtle.decrypt({ name: 'AES-GCM', iv }, key, fromBase64(parsed.payload));
             } catch (e) {
                 throw new Error('Wrong password');
             }
-            const data = normalizeVaultData(JSON.parse(new TextDecoder().decode(plaintext)));
+            let data;
+            try {
+                data = normalizeVaultData(JSON.parse(new TextDecoder().decode(plaintext)));
+            } catch (e) {
+                throw new Error('Malformed vault file');
+            }
             return { data, key, salt, iterations, legacy: false };
         }
 
@@ -193,7 +214,12 @@
             throw new Error('Wrong password');
         }
         if (!decrypted) throw new Error('Wrong password');
-        const data = normalizeVaultData(JSON.parse(decrypted));
+        let data;
+        try {
+            data = normalizeVaultData(JSON.parse(decrypted));
+        } catch (e) {
+            throw new Error('Malformed vault file');
+        }
         const salt = randomSalt();
         const key = await deriveVaultKey(password, salt);
         return { data, key, salt, iterations: V2_ITERATIONS, legacy: true };

@@ -2,9 +2,18 @@
  * Backward compatibility with the previously shipped app.
  *
  * The reference implementation here is not a reimplementation of the old
- * behaviour — it is the old code, loaded straight out of git (`HEAD`, i.e. the
- * last released commit) and run side by side with the current one. If the two
+ * behaviour — it is the old code, loaded straight out of git at a PINNED
+ * released commit and run side by side with the current one. If the two
  * ever disagree, this fails.
+ *
+ * WHAT `REF_VERSION` is pinned to: the last commit whose `app.js` still
+ * contained the derivation (`hash`/`generatePassword`) and whose
+ * `envelope.js` still dropped unknown payload keys — i.e. the last layout a
+ * shipped build ran under. It MUST NOT be the moving `HEAD`; a comparison
+ * against the current tree compares the app with itself and proves nothing.
+ * Override with the COMPAT_REF env var. Bump it on the commit a release
+ * ships from; `git log --oneline -- vault/core/derive.js` shows when the
+ * derivation left `app.js`, and the commit before that move is the reference.
  *
  * What "compatible" has to mean for a deterministic password manager:
  *
@@ -32,12 +41,15 @@ import { MemDisk, memTransport } from './memfs.mjs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '..');
 
+// The released build this suite holds the line against. See the header.
+const REF_VERSION = process.env.COMPAT_REF || 'ba414b5';
+
 const { Envelope, Store, Records: R, CryptoJS } = await loadCore();
 await import(new URL('../vault/core/transports.js', import.meta.url).pathname);
 await import(new URL('../vault/core/bootstrap.js', import.meta.url).pathname);
 const Bootstrap = globalThis.VaultBootstrap;
 
-const t = harness('compat (current vs git HEAD)');
+const t = harness(`compat (current vs git ${REF_VERSION})`);
 
 /** Load a file as it existed at a git revision, in its own global. */
 function loadFromGit(revision, file, extraGlobals = {}) {
@@ -71,11 +83,11 @@ function loadFromGit(revision, file, extraGlobals = {}) {
 }
 
 // The previously shipped envelope, verbatim.
-const old = loadFromGit('HEAD', 'vault/envelope.js').VaultEnvelope;
+const old = loadFromGit(REF_VERSION, 'vault/envelope.js').VaultEnvelope;
 
 /** The old app's password derivation, lifted out of the shipped app.js. */
 function oldGeneratePassword() {
-    const source = execSync('git show HEAD:vault/app.js', { cwd: repo, encoding: 'utf8' });
+    const source = execSync(`git show ${REF_VERSION}:vault/app.js`, { cwd: repo, encoding: 'utf8' });
     const hashFn = source.match(/function (?:hash|sha256Hex)\(text\) \{[\s\S]*?\n\}/)[0];
     const genFn = source.match(/function generatePassword\([\s\S]*?\n\}/)[0];
     const sandbox = { CryptoJS };

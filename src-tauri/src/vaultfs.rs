@@ -107,7 +107,16 @@ fn rotate_backups(path: &Path) {
             let _ = fs::rename(&from, &to);
         }
     }
-    let _ = fs::copy(path, backup_path(path, 1));
+    let target = backup_path(path, 1);
+    if fs::copy(path, &target).is_ok() {
+        // Fsync the copied backup so a crash cannot leave it as a non-empty
+        // but truncated prefix of the real file (best effort — a failure to
+        // sync only means the backup may be stale, never a refused save).
+        if let Ok(file) = fs::File::open(&target) {
+            let _ = file.sync_all();
+        }
+    }
+    let _ = sync_parent_dir(path);
 }
 
 /// Atomically replace a real filesystem path. Kept free of `AppHandle` so the
@@ -239,20 +248,37 @@ pub fn list_dir(dir: &str) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-/// Recover the newest readable backup generation of a file, if any.
+/// Recover the newest usable backup generation of a file, if any.
+///
+/// Skips generations that do not parse as a single JSON document. The only
+/// files that get backups are the vault snapshot and the keyslot file, both
+/// single JSON documents, so a truncated (crash-mid-copy) generation — non-empty
+/// yet missing its tail — must not win over an older complete one. An empty or
+/// unreadable generation is skipped the same way.
 pub fn read_backup(path: &str) -> Option<String> {
     let real = Path::new(path);
     if reject_traversal(real).is_err() {
         return None;
     }
     for generation in 1..=BACKUP_GENERATIONS {
-        if let Ok(text) = fs::read_to_string(backup_path(real, generation)) {
-            if !text.is_empty() {
-                return Some(text);
-            }
+        // A missing generation counts as "not usable", exactly like an
+        // incomplete one — it must not abort the scan, or an earlier crash
+        // that removed the newest backup would strand an older complete one.
+        let Ok(text) = fs::read_to_string(backup_path(real, generation)) else {
+            continue;
+        };
+        if is_complete_json(&text) {
+            return Some(text);
         }
     }
     None
+}
+
+/// Cheap structural check that a string is ONE complete JSON document.
+/// The vault's backups are JSON envelopes; a torn copy of one is a strict
+/// prefix and fails to parse.
+fn is_complete_json(text: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(text).is_ok()
 }
 
 #[cfg(test)]
@@ -311,15 +337,56 @@ mod tests {
     fn recovery_reads_the_newest_backup() {
         let dir = scratch("recover");
         let target = dir.join("topolino-vault.json");
-        write_path_atomic(&target, "good", true).unwrap();
-        write_path_atomic(&target, "alsogood", true).unwrap();
+        write_path_atomic(&target, r#"{"v":2,"gen":"good"}"#, true).unwrap();
+        // .bak1 is the content immediately before the current one.
+        write_path_atomic(&target, r#"{"v":2,"gen":"alsogood"}"#, true).unwrap();
+        assert_eq!(
+            fs::read_to_string(backup_path(&target, 1)).unwrap(),
+            r#"{"v":2,"gen":"good"}"#
+        );
 
         // Simulate the live file being destroyed by something outside our
         // control — a bad sync, a disk error, a user deleting it.
         fs::write(&target, "").unwrap();
 
         let recovered = read_backup(target.to_str().unwrap()).unwrap();
-        assert_eq!(recovered, "good");
+        assert_eq!(recovered, r#"{"v":2,"gen":"good"}"#);
+    }
+
+    #[test]
+    fn recovery_skips_a_truncated_newest_backup() {
+        let dir = scratch("recover-truncated");
+        let target = dir.join("topolino-vault.json");
+        // Three writes produce two rotating backup generations.
+        write_path_atomic(&target, r#"{"v":2,"gen":"g0"}"#, true).unwrap();
+        write_path_atomic(&target, r#"{"v":2,"gen":"g1"}"#, true).unwrap();
+        write_path_atomic(&target, r#"{"v":2,"gen":"g2"}"#, true).unwrap();
+        // .bak2 now holds "g0" elsewhere under target's name.
+        // Corrupt the newest backup: non-empty yet incomplete JSON.
+        fs::write(backup_path(&target, 1), r#"{"v":2,"gen":"g1"#).unwrap();
+        fs::write(&target, "").unwrap();
+
+        let recovered = read_backup(target.to_str().unwrap()).unwrap();
+        assert_eq!(recovered, r#"{"v":2,"gen":"g0"}"#);
+    }
+
+    #[test]
+    fn recovery_skips_a_missing_newest_backup() {
+        let dir = scratch("recover-missing");
+        let target = dir.join("topolino-vault.json");
+        // Three writes produce two rotating backup generations:
+        // .bak1 = "g1" (newest), .bak2 = "g0" (older). Delete .bak1 to
+        // simulate a crash that removed the newest backup.
+        write_path_atomic(&target, r#"{"v":2,"gen":"g0"}"#, true).unwrap();
+        write_path_atomic(&target, r#"{"v":2,"gen":"g1"}"#, true).unwrap();
+        write_path_atomic(&target, r#"{"v":2,"gen":"g2"}"#, true).unwrap();
+        fs::remove_file(backup_path(&target, 1)).unwrap();
+        fs::write(&target, "").unwrap();
+
+        // The missing generation must be treated as unusable (continue), not
+        // as a reason to abort the scan and return nothing.
+        let recovered = read_backup(target.to_str().unwrap()).unwrap();
+        assert_eq!(recovered, r#"{"v":2,"gen":"g0"}"#);
     }
 
     #[test]

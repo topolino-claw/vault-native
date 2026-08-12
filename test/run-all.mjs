@@ -18,6 +18,8 @@ const suites = [
     { file: 'migrate.test.mjs', what: 'one-shot legacy migration' },
     { file: 'compat.test.mjs', what: 'backward compatibility with the shipped version' },
     { file: 'app-wiring.test.mjs', what: 'app.js against a headless DOM' },
+    { file: 'hostile.test.mjs', what: 'hostile input / error-contract fuzz' },
+    { file: 'security-config.test.mjs', what: 'CSP parity and attack-surface statics' },
     { file: 'montecarlo.test.mjs', what: 'multi-device simulation' }
 ];
 

@@ -89,12 +89,24 @@
     function parseOtpauth(uri) {
         const m = /^otpauth:\/\/(?:totp|hotp)\/([^?]*)\?(.*)$/i.exec(String(uri).trim());
         if (!m) return null;
-        const label = decodeURIComponent(m[1] || '');
+        // Hostile input: a malformed percent-escape throws in
+        // decodeURIComponent. That must not propagate to the caller as a raw
+        // URIError — a non-usable URI reads as null, like any other bad input.
+        const safeDecode = (s) => {
+            try {
+                return decodeURIComponent(s);
+            } catch (e) {
+                return null;
+            }
+        };
+        const label = safeDecode(m[1] || '') || '';
         const params = new Map();
         for (const kv of m[2].split('&')) {
             const eq = kv.indexOf('=');
             if (eq === -1) continue;
-            params.set(kv.slice(0, eq).toLowerCase(), decodeURIComponent(kv.slice(eq + 1)));
+            const value = safeDecode(kv.slice(eq + 1));
+            if (value === null) continue;
+            params.set(kv.slice(0, eq).toLowerCase(), value);
         }
         const secret = params.get('secret');
         if (!secret) return null;

@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'release/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  js-tests:
+    name: JS suites (node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # compat.test.mjs loads the pinned released build straight out of
+          # git history, so a full clone (not a shallow one) is required.
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run all JS test suites
+        run: node test/run-all.mjs
+
+  rust-tests:
+    name: Rust (cargo test + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: cargo test --lib
+        run: cargo test --lib
+        working-directory: src-tauri
+      - name: cargo clippy --all-targets
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: src-tauri

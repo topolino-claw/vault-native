@@ -1651,7 +1651,12 @@ async function addTotp() {
     let algorithm = 'SHA1';
 
     if (uri) {
-        const p = VaultTotp.parseOtpauth(uri);
+        let p;
+        try {
+            p = VaultTotp.parseOtpauth(uri);
+        } catch (e) {
+            p = null;
+        }
         if (!p) { showToast('Not a valid otpauth:// link'); return; }
         issuer = issuer || p.issuer;
         account = account || p.account;

@@ -98,15 +98,22 @@ first things to re-check after any change to `store.js` or `bootstrap.js`.
 
 - `withGlobalTauri: true` exposes `window.__TAURI__` to page scripts. Needed
   because there is no bundler; mitigated by `script-src 'self'` and no remote
-  content. Tracked in `ROADMAP.md` §3.
+  content. **The blast radius of the exposed file commands is now contained by
+  the Rust-side capability scope (`src-tauri/src/scope.rs`, 2026-08-11):** only
+  paths that came out of a native dialog — the chosen vault folder, or a
+  file the user picked — are accepted by `read/write/append/list/remove_vault_*`.
+  A renderer bug is limited to locations the user already chose; it can no
+  longer silently reach arbitrary absolute paths.
 - CryptoJS (~48 KB, vendored) — used for SHA-256 in `derive.js` and for
   decrypting legacy v1 files. Removing it means either an async derivation
   (the signature is synchronous) or dropping v1 support. `ROADMAP.md` 2.6.
 - The plaintext master password is held for the session, because the
   plugin-compatible snapshot is password-encrypted. A v3 envelope keyed by the
   vault master key removes the need. `ROADMAP.md` §3.
-- No `FLAG_SECURE`: the seed phrase screen can be screenshotted and appears in
-  the Android recents thumbnail. `ROADMAP.md` §3.
+- Android `FLAG_SECURE` (no screenshots / no recents thumbnail) is set in
+  `gen/android/.../MainActivity.kt`, but `gen/android` is gitignored, so a
+  clean `tauri android init` regenerates it without the flag. Track
+  `gen/android` or add a template hook before relying on it.
 
 ---
 
@@ -128,9 +135,17 @@ The fix is per-entry versioning plus a rotation flow (`ROADMAP.md` §5).
 ## 6. Running the checks
 
 ```bash
-node test/run-all.mjs             # 78 tests
-cd src-tauri && cargo test --lib  # 7 durability tests
+node test/run-all.mjs              # all JS suites (122 tests)
+cd src-tauri && cargo test --lib   # durability + scope tests
+cargo clippy --all-targets -- -D warnings
 ```
+
+Suites: `core` (CRDT/keyslots/store), `migrate` (one-shot upgrade), `compat`
+(current vs the pinned released build `REF_VERSION`, see its header),
+`app-wiring` (real `app.js` in a headless DOM), `hostile` (error-contract and
+parser fuzzing), `security-config` (CSP parity + no-network statics), and
+`montecarlo`. CI runs every one of them plus `cargo test`/`clippy`
+(`.github/workflows/ci.yml`).
 
 The one worth running against any storage or merge change is
 `montecarlo.test.mjs`: three simulated devices, random actions, random sync

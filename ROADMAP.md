@@ -158,15 +158,16 @@ at. Bitwarden ships Argon2id. The envelope already carries `kdf.algo`, so this i
   the clipboard path goes native. Until then the password still appears in the Android 13+
   paste-preview and clipboard history.
 - **`withGlobalTauri: true`** exposes `__TAURI__` — including `read_vault_file` /
-  `write_vault_file` — to any script in the webview, so *any* script execution is arbitrary
-  filesystem access. Both CSPs now set `script-src 'self'` (no `unsafe-inline`), and the `<meta>`
-  CSP in `index.html` was brought to parity with `tauri.conf.json` on `connect-src 'none'` /
-  `object-src 'none'` (2026-08-10) — so inline-handler injection is blocked by policy in every
-  mode, not by which CSP happens to win. Still open, and the real amplifier: the
-  `read_vault_file` / `write_vault_file` / `remove_vault_file` / `list_vault_dir` commands accept
-  arbitrary absolute paths (a `..`-traversal guard now exists, but it is not a sandbox — a plain
-  absolute path still resolves), and the `fs`/`dialog` plugin permissions are unscoped in
-  `capabilities/default.json`. Scope the commands to the chosen vault location.
+  `write_vault_file` — to any script in the webview. **Contained (2026-08-11):
+  the file commands are now capability-scoped in Rust** (`src-tauri/src/scope.rs`).
+  Only paths produced by a native dialog — a picked folder (becomes a scope
+  root) or a picked file (authorized exactly) — are accepted; the renderer
+  cannot widen its own authority, and the permit set is persisted by Rust, not
+  by page state. The scope is containment, not a sandbox: the CSP
+  (`script-src 'self'`, `connect-src 'none'`, no `unsafe-inline`, kept in
+  parity between `tauri.conf.json` and the `index.html` `<meta>`) remains the
+  outer boundary. Any script execution is still a real bug; it is just no
+  longer *arbitrary filesystem access*.
 - **Master password held in memory for the whole session** (`_sessionMasterPassword`), plus seed
   and private key as JS strings. JS strings are immutable and cannot be zeroed, so `lockVault()`
   nulls every reference (password, seed, store, rendered secrets, timers) and lets GC reclaim
@@ -296,12 +297,14 @@ Android activity (see §3 for the gitignore caveat). New tests: RFC-6238 vectors
 
 | Suite | What it covers | Result |
 | --- | --- | --- |
-| `test/core.test.mjs` | clock, CRDT laws, oplog, keyslots, store, KDF-cost guard | 33 pass |
+| `test/core.test.mjs` | clock, CRDT laws, oplog, keyslots, store, TOTP/CSV, KDF-cost guard | 39 pass |
 | `test/migrate.test.mjs` | legacy migration, including failure paths | 14 pass |
-| `test/app-wiring.test.mjs` | real `app.js` against a headless DOM (incl. escaping + move) | 18 pass |
+| `test/compat.test.mjs` | pinned released build (`REF_VERSION` `ba414b5`), both directions | 12 pass |
+| `test/app-wiring.test.mjs` | real `app.js` against a headless DOM (incl. escaping + move) | 23 pass |
+| `test/hostile.test.mjs` | attacker-shaped input: envelope, oplog, CSV/otpauth/b64 edge cases | 20 pass |
+| `test/security-config.test.mjs` | CSP parity (index vs tauri.conf), no-network statics | 5 pass |
 | `test/montecarlo.test.mjs` | 3 devices, random ops/sync/crash/plugin edits (see MONTECARLO.md) | 9 pass |
-| `cargo test --lib` | atomic write, backups, append, `..`-traversal refusal | 8 pass |
-| `test/compat.test.mjs` | previously shipped version, both directions | 12 pass |
+| `cargo test --lib` | atomic write, backups + JSON recovery, append, scope, `..`-traversal refusal | 16 pass |
 
 `node test/run-all.mjs` runs everything.
 

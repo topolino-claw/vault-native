@@ -83,16 +83,21 @@ vault.
 ## Testing
 
 ```bash
-node test/run-all.mjs      # everything
-cd src-tauri && cargo test --lib   # atomic writes, backups, appends
+node test/run-all.mjs      # everything (7 suites)
+cd src-tauri && cargo test --lib   # atomic writes, backups, scope, appends
+cargo clippy --all-targets -- -D warnings
 ```
+
+CI runs every suite on every push/PR (`.github/workflows/ci.yml`).
 
 | Suite | Covers |
 | --- | --- |
 | `core.test.mjs` | clock ordering, CRDT merge laws, oplog durability, keyslots |
 | `migrate.test.mjs` | the one-shot legacy upgrade, including its failure paths |
 | `app-wiring.test.mjs` | the real `app.js` against a headless DOM |
-| `compat.test.mjs` | the previously shipped version, loaded out of git, read/written both ways |
+| `compat.test.mjs` | current vs the PINNED released build (`REF_VERSION`, default `ba414b5`), loaded out of git, read/written both ways |
+| `hostile.test.mjs` | attacker-shaped input: envelope error contract, oplog torn lines, CSV formula injection, otpauth/b64 edge cases |
+| `security-config.test.mjs` | CSP parity (index.html vs tauri.conf.json), no-network statics |
 | `montecarlo.test.mjs` | 3 devices, random actions, syncs, crashes, foreign edits |
 
 `montecarlo.test.mjs` is the one worth running when changing anything about
@@ -102,8 +107,10 @@ reaches a fixpoint instead of two devices fighting over writes. Failures print
 a seed that reproduces them: `MC_SEEDS=12345 node test/montecarlo.test.mjs`.
 
 `compat.test.mjs` is the one to keep green when touching `vault/envelope.js` or
-the password derivation: it runs the last released code side by side with the
-current code and asserts that generated passwords are byte-identical and that
-each version can read the other's files.
+the password derivation: it runs the pinned released build side by side with
+the current code and asserts that generated passwords are byte-identical and
+that each version can read the other's files. `REF_VERSION` is set at the
+top of the file; bump it on the commit a release ships from, never on a
+working-tree commit. `COMPAT_REF=<sha> node test/compat.test.mjs` overrides it.
 
 See `ROADMAP.md` for the security audit and what remains open.
